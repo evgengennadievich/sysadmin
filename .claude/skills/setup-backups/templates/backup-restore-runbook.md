@@ -115,7 +115,7 @@ docker rm -f <TEST_CONTAINER>
 
 ## Связанное
 
-- Скрипт оркестратора: `/opt/backup-tools/backup-all.sh`
-- Скрипт проверки возраста: `/opt/backup-tools/check-backup-age.sh`
+- Скрипт оркестратора: `/opt/infra/scripts/backup/backup-all.sh`
+- Скрипт проверки возраста: `/opt/infra/scripts/backup/check-backup-age.sh`
 - ADR о стратегии бэкапов: `decisions/000X-backup-strategy.md`
 - Инвентарь БД: `inventory/databases.md`

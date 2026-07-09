@@ -184,14 +184,14 @@ restic init
 
 ## Шаг 3: Установка скриптов дампа БД
 
-Скопировать `scripts/backup-*.sh` в `/opt/backup-tools/`:
+Скопировать `scripts/backup-*.sh` в `/opt/infra/scripts/backup/`:
 
 ```bash
-install -m 0755 scripts/backup-postgres.sh /opt/backup-tools/backup-postgres.sh
-install -m 0755 scripts/backup-mysql.sh    /opt/backup-tools/backup-mysql.sh
-install -m 0755 scripts/backup-redis.sh    /opt/backup-tools/backup-redis.sh
-install -m 0755 scripts/backup-all.sh      /opt/backup-tools/backup-all.sh
-install -m 0755 scripts/check-backup-age.sh /opt/backup-tools/check-backup-age.sh
+install -m 0755 scripts/backup-postgres.sh /opt/infra/scripts/backup/backup-postgres.sh
+install -m 0755 scripts/backup-mysql.sh    /opt/infra/scripts/backup/backup-mysql.sh
+install -m 0755 scripts/backup-redis.sh    /opt/infra/scripts/backup/backup-redis.sh
+install -m 0755 scripts/backup-all.sh      /opt/infra/scripts/backup/backup-all.sh
+install -m 0755 scripts/check-backup-age.sh /opt/infra/scripts/backup/check-backup-age.sh
 ```
 
 Каждый скрипт принимает имя контейнера как аргумент, делает `docker exec` для дампа изнутри
@@ -215,10 +215,10 @@ install -m 0755 scripts/check-backup-age.sh /opt/backup-tools/check-backup-age.s
 
 ```cron
 # Полный бэкап раз в сутки в 03:00 UTC (наименьшая нагрузка)
-0 3 * * * root /opt/backup-tools/backup-all.sh >> /var/log/backup-cron.log 2>&1
+0 3 * * * root /opt/infra/scripts/backup/backup-all.sh >> /var/log/backup-cron.log 2>&1
 
 # Проверка возраста раз в сутки в 09:00 UTC (после того как ночной бэкап точно завершился)
-0 9 * * * root /opt/backup-tools/check-backup-age.sh >> /var/log/backup-cron.log 2>&1
+0 9 * * * root /opt/infra/scripts/backup/check-backup-age.sh >> /var/log/backup-cron.log 2>&1
 ```
 
 **Verify:** `systemctl status cron` running, `cat /etc/cron.d/backup` показывает обе строки.
