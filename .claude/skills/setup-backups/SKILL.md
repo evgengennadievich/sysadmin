@@ -184,14 +184,14 @@ restic init
 
 ## Шаг 3: Установка скриптов дампа БД
 
-Скопировать `scripts/backup-*.sh` в `/opt/backup/`:
+Скопировать `scripts/backup-*.sh` в `/opt/backup-tools/`:
 
 ```bash
-install -m 0755 scripts/backup-postgres.sh /opt/backup/backup-postgres.sh
-install -m 0755 scripts/backup-mysql.sh    /opt/backup/backup-mysql.sh
-install -m 0755 scripts/backup-redis.sh    /opt/backup/backup-redis.sh
-install -m 0755 scripts/backup-all.sh      /opt/backup/backup-all.sh
-install -m 0755 scripts/check-backup-age.sh /opt/backup/check-backup-age.sh
+install -m 0755 scripts/backup-postgres.sh /opt/backup-tools/backup-postgres.sh
+install -m 0755 scripts/backup-mysql.sh    /opt/backup-tools/backup-mysql.sh
+install -m 0755 scripts/backup-redis.sh    /opt/backup-tools/backup-redis.sh
+install -m 0755 scripts/backup-all.sh      /opt/backup-tools/backup-all.sh
+install -m 0755 scripts/check-backup-age.sh /opt/backup-tools/check-backup-age.sh
 ```
 
 Каждый скрипт принимает имя контейнера как аргумент, делает `docker exec` для дампа изнутри
@@ -215,10 +215,10 @@ install -m 0755 scripts/check-backup-age.sh /opt/backup/check-backup-age.sh
 
 ```cron
 # Полный бэкап раз в сутки в 03:00 UTC (наименьшая нагрузка)
-0 3 * * * root /opt/backup/backup-all.sh >> /var/log/backup-cron.log 2>&1
+0 3 * * * root /opt/backup-tools/backup-all.sh >> /var/log/backup-cron.log 2>&1
 
 # Проверка возраста раз в сутки в 09:00 UTC (после того как ночной бэкап точно завершился)
-0 9 * * * root /opt/backup/check-backup-age.sh >> /var/log/backup-cron.log 2>&1
+0 9 * * * root /opt/backup-tools/check-backup-age.sh >> /var/log/backup-cron.log 2>&1
 ```
 
 **Verify:** `systemctl status cron` running, `cat /etc/cron.d/backup` показывает обе строки.
@@ -240,6 +240,20 @@ install -m 0755 scripts/check-backup-age.sh /opt/backup/check-backup-age.sh
 
 Без этого шага скилл НЕ считается завершённым. Бэкап, который ни разу не восстанавливали, —
 это надежда, а не бэкап.
+
+**Ветка «БД на сервере ещё нет»** (свежий сервер: bootstrap → backups ДО переноса данных —
+боевой кейс bronto 2026-07-09). Конвейер всё равно проверяется целиком, на синтетике:
+1. Поднять тестовый контейнер (образ = будущий прод, для pgvector-кластера —
+   `pgvector/pgvector:pg16`), создать БД с известным числом строк
+   (`INSERT ... SELECT ... FROM generate_series(1,1234)`).
+2. Прогнать ШТАТНЫЙ скрипт конвейера (`backup-postgres.sh <container> <db>`) →
+   `restic backup --tag e2e-test` → restore из хранилища во второй контейнер → сверить counts.
+3. Уборка: оба контейнера удалить, `restic forget --tag e2e-test --prune` (тестовый snapshot
+   не должен жить в боевом репозитории), локальные дампы стереть, в env-конфиге список
+   контейнеров оставить ПУСТЫМ с TODO «заполнить при переносе БД».
+⚠️ Грабля ожидания: `pg_isready` отвечает успехом и на ВРЕМЕННЫЙ сервер initdb (entrypoint
+запускает его и перезапускает) — после первого успеха подожди 5-10 сек и проверь повторно,
+иначе `createdb` попадает в щель рестарта («socket ... failed»).
 
 Процедура (для PostgreSQL — для MySQL/Redis см. `references/restic-quirks.md`):
 
@@ -320,6 +334,16 @@ docker rm -f pg-restore-test
   без `--prune`.
 - **«passphrase в env-файле без chmod 600»** — любой пользователь с доступом на чтение
   получает ключ к расшифровке всех бэкапов. `chmod 600 /root/.backup-env` обязательно.
+- **«curl к алерт-каналу без таймаута»** — при недоступном api.telegram.org (реальный кейс:
+  с одного Selectel-IP timeout, с соседнего работает — сегмент/DPI) скрипт висит НАВСЕГДА,
+  ежедневный cron копит зависшие процессы. Урок (bronto 2026-07-09): всем curl в скриптах
+  скилла добавлен `-m 20`; недоступный канал = WARNING в лог и жить дальше, не зависание.
+- **«multipart-огрызки в S3-совместимом — бесплатны и невидимы»** — нет: Selectel складывает
+  фрагменты оборванных загрузок в скрытый служебный контейнер `*_s3multipartuploads` и
+  ТАРИФИЦИРУЕТ его (боевой кейс 2026-07-09: 233 МБ мусора с июня; известный чужой кейс —
+  551 ГБ). `rclone cleanup` через штатный ListMultipartUploads их может НЕ видеть — тогда
+  чистить содержимое служебного контейнера напрямую (`rclone delete <remote>:<bucket>_s3multipartuploads`).
+  В cron-шаблон добавлена еженедельная чистка.
 
 # Граничные случаи
 

@@ -40,13 +40,13 @@ send_alert() {
     case "$ALERT_CHANNEL" in
         telegram)
             # ALERT_TOKEN = bot token, ALERT_TARGET = chat_id
-            curl -s -X POST "https://api.telegram.org/bot${ALERT_TOKEN}/sendMessage" \
+            curl -s -m 20 -X POST "https://api.telegram.org/bot${ALERT_TOKEN}/sendMessage" \
                 -d "chat_id=${ALERT_TARGET}" \
                 -d "text=$(hostname): $msg" > /dev/null
             ;;
         slack)
             # ALERT_TOKEN = incoming webhook URL, ALERT_TARGET (опционально) = override channel
-            curl -s -X POST -H 'Content-Type: application/json' \
+            curl -s -m 20 -X POST -H 'Content-Type: application/json' \
                 --data "{\"text\":\"$(hostname): $msg\"}" \
                 "$ALERT_TOKEN" > /dev/null
             ;;

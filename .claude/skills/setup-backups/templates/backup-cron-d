@@ -4,15 +4,19 @@
 #   install -m 0644 templates/backup-cron-d /etc/cron.d/backup
 #   systemctl reload cron  # или systemctl status cron — на ряде дистрибутивов перечитка автоматическая
 #
-# Шаблон. Замените пути на актуальные для вашего сервера, если /opt/backup/ другой.
+# Шаблон. Замените пути на актуальные для вашего сервера, если /opt/backup-tools/ другой.
 
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MAILTO=""
 
 # Полный бэкап раз в сутки в 03:00 UTC (наименьшая нагрузка на прод)
-0 3 * * * root /opt/backup/backup-all.sh >> /var/log/backup-cron.log 2>&1
+0 3 * * * root /opt/backup-tools/backup-all.sh >> /var/log/backup-cron.log 2>&1
 
 # Проверка возраста последнего snapshot — раз в сутки в 09:00 UTC
 # (после того как ночной бэкап точно завершился; алерт если старше 36ч)
-0 9 * * * root /opt/backup/check-backup-age.sh >> /var/log/backup-cron.log 2>&1
+0 9 * * * root /opt/backup-tools/check-backup-age.sh >> /var/log/backup-cron.log 2>&1
+# Еженедельная чистка огрызков multipart-загрузок в S3-совместимом хранилище.
+# Selectel тарифицирует невидимый служебный контейнер *_s3multipartuploads (боевой
+# кейс 2026-07-09: 233 МБ мусора). Замените remote/bucket на свои; для WebDAV — удалите строку.
+30 4 * * 0 root rclone cleanup <remote>:<bucket> 2>> /var/log/backup-cron.log

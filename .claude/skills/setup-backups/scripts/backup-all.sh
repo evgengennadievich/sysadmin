@@ -143,7 +143,7 @@ log "=== BACKUP DONE: SUCCESS=$SUCCESS, FAIL=$FAIL ==="
 
 # Алерт при ошибках
 if [ "$FAIL" -gt 0 ] && [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+    curl -s -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
         -d "chat_id=${TELEGRAM_CHAT_ID}" \
         -d "text=BACKUP $(hostname): SUCCESS=$SUCCESS FAIL=$FAIL — проверь $LOG_FILE" \
         > /dev/null
