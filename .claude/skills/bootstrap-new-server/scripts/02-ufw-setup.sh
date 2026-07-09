@@ -24,8 +24,15 @@ fi
 ufw --force default deny incoming
 ufw --force default allow outgoing
 
-# --- 3. Открыть SSH-порт (с rate-limit для защиты от brute-force) ---
-ufw limit "${SSH_PORT}/tcp" comment 'SSH (rate-limited)'
+# --- 3. Открыть SSH-порт ---
+# `ufw allow`, НЕ `ufw limit`. Защиту от brute-force держит fail2ban (шаг 03,
+# jail sshd, maxretry=5) — он умнее: банит по НЕУДАЧНЫМ логинам из auth.log, а не
+# по частоте новых TCP-коннектов. `ufw limit` (6+ коннектов/30 сек → блок 30 сек)
+# режет ЛЕГИТИМНУЮ работу: пачки SSH-подключений при автоматизации/деплое/миграции
+# ловят самобан (боевая находка bronto 2026-07-09 — прямой Mac→сервер рвался
+# `Connection closed`/`timed out`, хотя fail2ban был чист). Дублировать оба слоя
+# нет смысла: fail2ban покрывает brute-force, UFW-лимит только мешает.
+ufw allow "${SSH_PORT}/tcp" comment 'SSH (brute-force защита — fail2ban, шаг 03)'
 
 # --- 4. HTTP/HTTPS ---
 ufw allow 80/tcp comment 'HTTP'
