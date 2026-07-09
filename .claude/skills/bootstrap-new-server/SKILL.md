@@ -106,9 +106,13 @@ LANG_FROM_CONFIG=$(get_agent_field '.operator.language' '.language' ru)
 
 **Что делает скрипт:**
 1. Создаёт пользователя `$ADMIN_USER` (если ещё нет), добавляет в группу `sudo`.
-2. Устанавливает `$SSH_KEY_PUB` в `/home/$ADMIN_USER/.ssh/authorized_keys` (mode 600, owner — admin).
-3. Правит `/etc/ssh/sshd_config`: `PermitRootLogin no`, `PasswordAuthentication no`, `Port $SSH_PORT`.
-4. Делает `sshd -t` (syntax check). НЕ перезапускает sshd до подтверждения.
+2. Настраивает **NOPASSWD-sudo** (`/etc/sudoers.d/90-$ADMIN_USER` + `visudo -c`) — обязательный
+   анти-lockout шаг: `useradd` не задаёт пароль, и без NOPASSWD после отключения root на
+   сервере не останется работающего sudo (боевой кейс bronto 2026-07-09). Ключ — единственный
+   фактор входа; безопасность не ниже заменяемой схемы «root по ключу».
+3. Устанавливает `$SSH_KEY_PUB` в `/home/$ADMIN_USER/.ssh/authorized_keys` (mode 600, owner — admin).
+4. Правит `/etc/ssh/sshd_config`: `PermitRootLogin no`, `PasswordAuthentication no`, `Port $SSH_PORT`.
+5. Делает `sshd -t` (syntax check). НЕ перезапускает sshd до подтверждения.
 
 **Запуск:**
 ```bash
@@ -116,7 +120,9 @@ ssh root@$SERVER_IP "ADMIN_USER='$ADMIN_USER' SSH_KEY_PUB='$SSH_KEY_PUB' SSH_POR
 ```
 
 **Verify (КРИТИЧНО — не перезапускай sshd до проверки!):**
-1. В новом терминале: `ssh -p $SSH_PORT $ADMIN_USER@$SERVER_IP "id"` — должно сработать.
+1. В новом терминале: `ssh -p $SSH_PORT $ADMIN_USER@$SERVER_IP "id && sudo -n true && echo SUDO_OK"` —
+   обязаны сработать И вход, И беспарольный sudo. Нет `SUDO_OK` → это будущий lockout:
+   НЕ перезапускай sshd, сначала разберись с sudoers.
 2. Только после этого: `ssh root@$SERVER_IP "systemctl restart sshd"`.
 3. Проверить, что root больше не пускает: `ssh root@$SERVER_IP "id"` — должно отвалиться с `Permission denied`.
 
@@ -218,6 +224,8 @@ ssh $ADMIN_USER@$SERVER_IP -p $SSH_PORT "ls -la $INFRA_DIR && cd $INFRA_DIR && g
 ```
 
 Должны быть: `.gitignore`, `decisions/`, `incidents/`, `runbooks/`, `inventory/`, один первичный коммит.
+Плюс `gitleaks version` отвечает (скрипт ставит git из apt и gitleaks бинарником с GitHub,
+если их нет — минимальная Ubuntu 24.04 идёт без git, боевой кейс bronto 2026-07-09).
 
 ## Шаг 6: Дальнейшие шаги
 
@@ -257,6 +265,14 @@ ssh $ADMIN_USER@$SERVER_IP -p $SSH_PORT "ls -la $INFRA_DIR && cd $INFRA_DIR && g
   по определению. Урок: bootstrap — OPTIONAL-режим чтения конфига (если есть локально
   на машине оператора — подхватит `language` и `operator.timezone`, иначе defaults).
 - **«UFW работает в Docker»** — UFW и Docker конфликтуют по iptables. Docker по умолчанию обходит UFW для контейнеров с `ports:`. Решение: либо `iptables=false` в `/etc/docker/daemon.json` (но тогда контейнеры теряют сеть), либо настройка `DOCKER-USER` chain в UFW — см. `references/ubuntu-vs-debian-quirks.md`. На свежем сервере без контейнеров пока не критично, но знай заранее. Полная картина (3 решения по возрастанию радикальности + дефолт `127.0.0.1:port` биндинг) — в эталоне `.claude/knowledge/networking/_reference/server-networks-defaults.md` §7.
+- **«git есть на любом Ubuntu»** — минимальные образы 24.04 идут БЕЗ git: `05-git-init.sh`
+  падал «git: command not found», а gitleaks в apt нет вовсе — hook-защита от секретов молча
+  не появлялась. Урок (bronto 2026-07-09): скрипт 05 сам ставит git (apt) + gitleaks (бинарник
+  с GitHub releases) и честно предупреждает, если GitHub недоступен.
+- **«создал admin-юзера — sudo работает»** — `useradd` не задаёт пароль; с закомментированным
+  NOPASSWD-блоком после `PermitRootLogin no` + restart sshd на сервере не остаётся работающего
+  sudo (lockout, единственный путь — консоль провайдера). Урок (bronto 2026-07-09): NOPASSWD
+  теперь обязательный шаг скрипта 01 + verify `sudo -n true` ДО рестарта sshd.
 - **«acme.sh поставится с Docker»** — лучше отдельным шагом после bootstrap, не входит в этот скилл. Делается вручную при первом TLS-сертификате (для каждого сервера домены индивидуальны).
 - **«SSH-порт 22 — небезопасно»** — миф. fail2ban + ключи + отключённый PasswordAuthentication защищают; смена порта — security through obscurity. Меняем по желанию (меньше шума в логах), не по необходимости.
 - **«PermitRootLogin without-password — компромисс»** — нет, отключай полностью (`no`). Если корневой ключ скомпрометирован — последствия фатальны. У оператора есть `sudo` через `$ADMIN_USER`.

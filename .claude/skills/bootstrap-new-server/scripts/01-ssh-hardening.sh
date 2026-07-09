@@ -22,13 +22,23 @@ if ! id "$ADMIN_USER" &>/dev/null; then
     echo "[01] Создаю пользователя $ADMIN_USER"
     useradd -m -s /bin/bash "$ADMIN_USER"
     usermod -aG sudo "$ADMIN_USER"
-    # Чтобы sudo не спрашивал пароль для admin (ОПЦИОНАЛЬНО — закомментировано по умолчанию):
-    # echo "$ADMIN_USER ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/90-$ADMIN_USER
-    # chmod 440 /etc/sudoers.d/90-$ADMIN_USER
 else
     echo "[01] Пользователь $ADMIN_USER уже существует — пропускаю создание"
     # Убеждаемся, что в группе sudo
     usermod -aG sudo "$ADMIN_USER"
+fi
+
+# --- 1b. Беспарольный sudo (ОБЯЗАТЕЛЬНО, анти-lockout) ---
+# useradd не задаёт пароль. Скрипт дальше отключает root-логин; если у admin-юзера
+# нет ни пароля, ни NOPASSWD — после restart sshd на сервере не останется работающего
+# sudo (lockout). Боевой кейс: bronto 2026-07-09, пойман вручную до рестарта.
+# Ключ — единственный фактор входа; NOPASSWD не понижает безопасность против
+# схемы «root по тому же ключу», которую этот скрипт заменяет.
+if ! sudo -l -U "$ADMIN_USER" 2>/dev/null | grep -q "NOPASSWD"; then
+    echo "[01] Настраиваю NOPASSWD-sudo для $ADMIN_USER (иначе lockout после отключения root)"
+    echo "$ADMIN_USER ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/90-$ADMIN_USER"
+    chmod 440 "/etc/sudoers.d/90-$ADMIN_USER"
+    visudo -c >/dev/null || { echo "[01] FATAL: sudoers сломан, откатываю"; rm -f "/etc/sudoers.d/90-$ADMIN_USER"; exit 1; }
 fi
 
 # --- 2. Настроить SSH-ключ ---
@@ -82,10 +92,12 @@ cat <<EOF
 [01]
 [01] ВНИМАНИЕ: НЕ перезагружай sshd, пока не проверишь новый ключ!
 [01]
-[01] В НОВОМ терминале выполни:
-[01]   ssh -p ${SSH_PORT} ${ADMIN_USER}@<server-ip>
+[01] В НОВОМ терминале выполни (обе проверки, ДО рестарта sshd):
+[01]   ssh -p ${SSH_PORT} ${ADMIN_USER}@<server-ip> "id && sudo -n true && echo SUDO_OK"
+[01]   # вход по ключу + работающий sudo БЕЗ пароля. Нет SUDO_OK = lockout после
+[01]   # рестарта: НЕ перезапускай sshd, разберись с sudoers.
 [01]
-[01] Если зашло — ТОЛЬКО ПОТОМ выполни на сервере:
+[01] Если зашло и SUDO_OK — ТОЛЬКО ПОТОМ выполни на сервере:
 [01]   sudo systemctl restart sshd
 [01]
 [01] После рестарта проверь, что root больше не пускает:

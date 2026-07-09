@@ -16,6 +16,26 @@ set -euo pipefail
 
 echo "[05-git-init] ADMIN_USER=$ADMIN_USER  INFRA_DIR=$INFRA_DIR"
 
+# --- 0. Пререквизиты: git + gitleaks ---
+# Минимальные образы Ubuntu 24.04 идут БЕЗ git (боевой кейс bronto 2026-07-09:
+# «git: command not found»), а gitleaks нет в apt вовсе — без него pre-commit hook
+# ниже превращается в пустышку и защита от коммита секретов молча не работает.
+if ! command -v git >/dev/null 2>&1; then
+    echo "[05] git не найден — устанавливаю"
+    sudo apt-get install -y -qq git >/dev/null
+fi
+if ! command -v gitleaks >/dev/null 2>&1; then
+    echo "[05] gitleaks не найден — ставлю бинарник с GitHub releases"
+    GL_VER=$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest 2>/dev/null | grep -m1 '"tag_name"' | grep -oE '[0-9.]+' || true)
+    if [ -n "${GL_VER:-}" ] && curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GL_VER}/gitleaks_${GL_VER}_linux_x64.tar.gz" -o /tmp/gitleaks.tgz; then
+        sudo tar -xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks && rm -f /tmp/gitleaks.tgz
+        echo "[05] gitleaks $(gitleaks version) установлен"
+    else
+        echo "[05] WARN: не удалось скачать gitleaks (нет доступа к GitHub?) —"
+        echo "[05]       pre-commit hook будет пропускать проверку. Установи вручную позже!"
+    fi
+fi
+
 # --- 1. /opt/ структура ---
 echo "[05] Создаю структуру /opt/"
 sudo install -d -m 0755 -o "$ADMIN_USER" -g "$ADMIN_USER" \
