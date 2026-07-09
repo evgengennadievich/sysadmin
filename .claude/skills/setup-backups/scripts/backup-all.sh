@@ -40,7 +40,14 @@ if [ ! -r "$CONFIG" ]; then
 fi
 
 # shellcheck disable=SC1090
+# set -a: экспортируем переменные конфига в окружение. restic/rclone — дочерние
+# процессы, и без экспорта они не видят RESTIC_REPOSITORY / AWS_ACCESS_KEY_ID /
+# AWS_SECRET_ACCESS_KEY и падают «Fatal: Please specify repository location».
+# (боевая находка Bronto 2026-07-09: дампы БД проходили, а restic backup молча
+#  фейлил — конфиг читался в шелл, но не экспортировался в restic.)
+set -a
 source "$CONFIG"
+set +a
 
 : "${BACKUP_DIR:=/opt/backups/dbs}"
 : "${RETENTION_DAYS:=7}"

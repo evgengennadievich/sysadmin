@@ -27,7 +27,12 @@ if [ ! -r "$CONFIG" ]; then
 fi
 
 # shellcheck disable=SC1090
+# set -a: экспорт конфига в окружение — restic (дочерний процесс) иначе не видит
+# RESTIC_REPOSITORY / AWS_* и падает «Please specify repository location».
+# (боевая находка Bronto 2026-07-09 — тот же корень, что в backup-all.sh.)
+set -a
 source "$CONFIG"
+set +a
 
 : "${BACKUP_AGE_THRESHOLD_HOURS:=36}"
 : "${ALERT_CHANNEL:=}"  # telegram | slack | email | (пусто = только лог)

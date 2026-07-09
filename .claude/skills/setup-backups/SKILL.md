@@ -246,8 +246,11 @@ install -m 0755 scripts/check-backup-age.sh /opt/infra/scripts/backup/check-back
 1. Поднять тестовый контейнер (образ = будущий прод, для pgvector-кластера —
    `pgvector/pgvector:pg16`), создать БД с известным числом строк
    (`INSERT ... SELECT ... FROM generate_series(1,1234)`).
-2. Прогнать ШТАТНЫЙ скрипт конвейера (`backup-postgres.sh <container> <db>`) →
-   `restic backup --tag e2e-test` → restore из хранилища во второй контейнер → сверить counts.
+2. Прогнать **оркестратор целиком** — `backup-all.sh` (не отдельный `backup-postgres.sh`!),
+   читая тот же `/root/.backup-env`, что и cron → restore из хранилища во второй контейнер →
+   сверить counts. **Почему именно оркестратор, а не отдельный дамп-скрипт:** только полный
+   прогон воспроизводит cron-окружение и ловит баги экспорта конфига (`set -a`, см. Failed
+   Attempts) — вызов restic вручную с экспортированными переменными их маскирует.
 3. Уборка: оба контейнера удалить, `restic forget --tag e2e-test --prune` (тестовый snapshot
    не должен жить в боевом репозитории), локальные дампы стереть, в env-конфиге список
    контейнеров оставить ПУСТЫМ с TODO «заполнить при переносе БД».
@@ -329,6 +332,14 @@ docker rm -f pg-restore-test
   для соответствующего remote указать `transfers = 1`.
 - **«backup-all c set -e»** — одна упавшая БД останавливает весь прогон, остальные не
   бэкапятся. set -e ОТКЛЮЧИТЬ для оркестратора (`set -uo pipefail` достаточно).
+- **«source конфига без `set -a` → restic не видит репозиторий»** — `source /root/.backup-env`
+  читает переменные в текущий шелл, но `restic`/`rclone` — **дочерние процессы**, и без
+  экспорта они не наследуют `RESTIC_REPOSITORY` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
+  Симптом: дампы БД проходят (`SUCCESS`), а `restic backup` падает `Fatal: Please specify
+  repository location`. Скрипты оборачивают `source` в `set -a … set +a`. **Коварство**
+  (bronto 2026-07-09): ручной e2e-restore-тест это НЕ ловит — там оператор экспортирует
+  переменные руками перед вызовом restic; баг всплывает только на автономном cron-прогоне.
+  Поэтому Шаг 7 обязан гонять restore **через сам `backup-all.sh`**, не в обход него.
 - **«ежедневный prune»** — `restic prune` через WebDAV-хранилища занимает 30+ минут
   на крупных репозиториях. Запускать только по воскресеньям, daily — только `forget`
   без `--prune`.
