@@ -19,11 +19,37 @@ Claude Code хранит транскрипты в ~/.claude/projects/<slug>/<se
 Никаких изменений на диске не делает (Green Zone). PII оператора (IP, домены)
 в дайджесте остаётся — поэтому дайджест и сырой отчёт живут в gitignore-зоне
 retro/reviews/, а в трекаемый backlog идут только обезличенные находки (ADR-0017).
+
+Секреты (пароли в URL, токены, API-ключи) РЕДАКТИРУЮТСЯ автоматически перед выводом
+(находка ретро 2026-07-10: транскрипт содержал живые креды из вывода grep по конфигам;
+digest — одна ошибка git add -f до утечки). Redaction — страховка, не индульгенция:
+правило «читать файлы с секретами только с редакцией в самой команде» остаётся
+(references/trust-zones.md, Green Zone).
 """
 import sys, os, re, json, glob
 
 TEXT_CAP = 3000          # макс. символов на текстовый блок
 RESULT_CAP = 1500        # макс. символов на tool_result / вход tool_use
+
+# Типовые секреты — замазываются до записи в дайджест. Git-хеши (40 hex) не трогаем:
+# порог для голого hex — 48+ символов (64-hex токены), привязка аудитора к коммитам живёт.
+SECRET_PATTERNS = [
+    (re.compile(r'\bgithub_pat_[A-Za-z0-9_]{20,}'), '***GH-PAT***'),
+    (re.compile(r'\bgh[pousr]_[A-Za-z0-9]{20,}\b'), '***GH-TOKEN***'),
+    (re.compile(r'(://[^/\s:@"\']+:)[^@\s"\']+(@)'), r'\1***\2'),          # URL-креды
+    (re.compile(r'\b[0-9a-f]{48,}\b'), '***HEX-TOKEN***'),
+    (re.compile(r'\bsk-[A-Za-z0-9_-]{20,}'), '***API-KEY***'),
+    (re.compile(r'\bAKIA[0-9A-Z]{16}\b'), '***AWS-KEY***'),
+    (re.compile(r'(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]{16,}'), r'\1***'),
+    (re.compile(r'(?i)((?:pass(?:word|wd|phrase)?|secret|token|api[_-]?key)\w*'
+                r'["\']?\s*[:=]\s*["\']?)([^\s"\',;]{8,})'), r'\1***REDACTED***'),
+]
+
+
+def redact(s: str) -> str:
+    for pat, repl in SECRET_PATTERNS:
+        s = pat.sub(repl, s)
+    return s
 
 
 def project_dir() -> str:
@@ -47,7 +73,7 @@ def resolve_transcript(arg: str | None) -> str:
 
 
 def clip(s: str, cap: int) -> str:
-    s = s.rstrip()
+    s = redact(s.rstrip())
     return s if len(s) <= cap else s[:cap] + f"\n… [усечено, всего {len(s)} симв.]"
 
 
