@@ -208,9 +208,11 @@ ensure_local_env() {
     LOCAL_ENV_PM="$(_detect_pkg_manager)"
     LOCAL_ENV_JQ="$(command -v jq 2>/dev/null || true)"
 
-    # 1. bash. Если дошли сюда — bash есть (скрипт исполняется в нём). Ветка на случай
-    #    явной диагностики; реальный отказ «нет bash» происходит ДО запуска этого файла.
-    if [ -z "${BASH_VERSION:-}" ]; then
+    # 1. bash. Проверяем НАЛИЧИЕ бинарника, а не то, что текущий процесс — bash:
+    #    Claude Code гоняет команды через дефолтный шелл оператора (на macOS с Catalina
+    #    это обычно zsh), и $BASH_VERSION в zsh-процессе пуста, даже если bash в системе
+    #    есть и прекрасно работает (инцидент: ложный Windows-хинт на чистом macOS+zsh).
+    if ! command -v bash >/dev/null 2>&1; then
         echo "ERROR: нужен bash, а оболочка другая." >&2
         _bash_manual_hint
         return 1

@@ -73,7 +73,10 @@ self_test_setup() {
     esac
 
     # 1. bash + jq
-    [ -n "${BASH_VERSION:-}" ] || _stp_add "Нет bash (оболочка не bash — нужен Git Bash на Windows)."
+    # Проверяем НАЛИЧИЕ бинарника bash, а не $BASH_VERSION текущего процесса — Claude Code
+    # гоняет команды через дефолтный шелл оператора (на macOS это часто zsh), где
+    # $BASH_VERSION пуста даже при установленном и рабочем bash.
+    command -v bash >/dev/null 2>&1 || _stp_add "Нет bash (оболочка не bash — нужен Git Bash на Windows)."
     if command -v jq >/dev/null 2>&1; then :; else
         _stp_add "Утилита jq недоступна — без неё конфиг не читается. Установка jq не удалась."
     fi
