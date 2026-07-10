@@ -2,11 +2,12 @@
 name: inventory-scan
 description: |
   Read-only инвентаризация сервера: dump-snapshot.sh → 9 текстовых документов в inventory/
-  (services, networks, volumes, databases, domains, cron, host-scripts, automations, server)
-  + до 5 mermaid-диаграмм в inventory/diagrams/ (topology, services-network, domains-routing,
-  vpn-architecture, automations). Сравнение с прошлым inventory с выделением drift'ов. Green Zone.
+  (services, networks, volumes, databases, domains, cron, host-scripts, automations, server).
+  Сравнение с прошлым inventory с выделением drift'ов + чек «хлам» (сироты-volume, сети вне
+  эталона, дубли compose). Диаграммы не генерирует (ADR-0019: источник фактов — снимок,
+  витрина — дашборд). Green Zone.
   Триггеры: «инвентаризация», «снять снимок сервера», «что у меня на сервере», «обновить inventory»,
-  «обнови схемы инфры», «отрисуй диаграмму», «scan server», «inventory drift», «refresh inventory».
+  «scan server», «inventory drift», «refresh inventory».
   НЕ для изменений на сервере (это cleanup-existing-server и др.); НЕ для аудита безопасности
   (audit-security).
 allowed-tools: Bash, Read, Edit, Write
@@ -176,6 +177,24 @@ done
 Drift-категории: **drift+** (есть в реальности, нет в inventory) / **drift-** (есть в
 inventory, нет в реальности) / **drift~** (расхождение полей — порт, образ, статус).
 
+**Чек «хлам»** (якорь §3.10 персоны, «как в аптеке») — отдельная секция drift-отчёта:
+
+```bash
+# 1. Анонимные volume без потребителей (сироты restore-тестов/миграций)
+grep -E "^local +[0-9a-f]{64}$" "$SNAPSHOT_DIR/volumes.txt" || true
+# в volumes.txt (docker system df -v) сирота = LINKS 0 у hash-имени
+# 2. Сети вне эталона: всё, что не {data, services, proxy-corridor/xray, monitoring,
+#    bridge, host, none} — особенно автосети compose <project>_default
+# 3. Дубли compose: один container_name в двух working_dir
+jq -r '.[] | .Name + "\t" + (.Config.Labels["com.docker.compose.project.working_dir"] // "-")' \
+  "$SNAPSHOT_DIR/containers-inspect.json"
+# + сверить compose-files.txt: файлы, не породившие ни одного контейнера
+# 4. Публичные порты (0.0.0.0/*) из host-resources.txt без владельца в services/server.md
+```
+
+Каждая находка — в секцию `## Хлам` drift-отчёта с предложением сноса. Сам не удаляю
+(Green Zone + C.7) — решает оператор.
+
 Результат — `$SNAPSHOT_DIR/drift-report.md`. Нет drift'ов — пишу «drift'ов не найдено,
 inventory синхронен». **Мнимый drift** (снимок старее, чем уже обновлённый inventory)
 помечаю отдельно как объяснённый, не как реальное расхождение.
@@ -204,49 +223,9 @@ touches | log | status`. Агрегирую данные из четырёх и�
 - `host-scripts-content.txt` → чем pipeline/скрипт занят (для колонки `touches`)
 
 Колонка `touches` — главная: что автоматизация трогает (БД из `databases.md`, сервис
-из `services.md`, внешний API — Telegram/RSS/Claude). Это **источник связей** для
-диаграммы `automations.mmd`. Не дублирую `cron.md`/`host-scripts.md` слово в слово —
+из `services.md`, внешний API — Telegram/RSS/Claude). Это источник связей для сборщика
+дашборда (ADR-0019). Не дублирую `cron.md`/`host-scripts.md` слово в слово —
 агрегирую и осмысляю. Если автоматизаций на сервере нет — документ не создаю.
-
-## Шаг 4.5. Mermaid-диаграммы инфраструктуры
-
-После обновления текстовых документов inventory — обновить визуальные mermaid-диаграммы в `$INFRA/inventory/diagrams/`.
-
-**Шаблоны** (5 файлов) лежат в публичном репо: `<sysadmin-root>/.claude/skills/inventory-scan/templates/diagrams/`.
-
-**Алгоритм:**
-
-```bash
-DIAGRAMS_DIR="$INFRA/inventory/diagrams"
-TEMPLATES_DIR="<SYSADMIN_ROOT>/.claude/skills/inventory-scan/templates/diagrams"
-
-mkdir -p "$DIAGRAMS_DIR"
-
-# Если папка пустая (первый запуск) — копирую все шаблоны
-if [ -z "$(ls -A "$DIAGRAMS_DIR" 2>/dev/null)" ]; then
-    cp "$TEMPLATES_DIR"/*.mmd "$DIAGRAMS_DIR/"
-    cp "$TEMPLATES_DIR/README.md" "$DIAGRAMS_DIR/"
-fi
-```
-
-**Что обновляется в каждой диаграмме** (использую `Edit`, не переписываю целиком):
-
-1. **`topology.mmd`** — высокоуровневая карта. Источник: `services.md` (группы), `domains.md` (внешние домены), `server.md` (имя хоста, провайдер, IP). Группа `automations` появляется **только при непустом `automations.md`** — показываю факт наличия + 1-2 ключевые связи (например, pipeline → Postgres, pipeline → Telegram), без детализации триггеров (детали — в `automations.mmd`).
-2. **`services-network.mmd`** — Docker-сети + контейнеры + порты. Источник: `networks.md` + `services.md` (колонки «Порт» и «Сеть»).
-3. **`domains-routing.mmd`** — домен → nginx → upstream. Источник: `domains.md` + nginx-конфиги из snapshot (`nginx-sites.txt`).
-4. **`vpn-architecture.mmd`** — **только если** `vpn.enabled: true` в `infra-config.json`. Иначе удалить файл из `diagrams/` (если был от прошлого запуска). Источник: `infra-config.json` секция vpn + `services.md` (3x-ui контейнер) + `networks.md` (mixed inbound если есть).
-5. **`automations.mmd`** — **только если** на сервере есть хоть одна автоматизация (непустой `automations.md`). Иначе удалить файл из `diagrams/` (если был от прошлого запуска) — по образцу `vpn-architecture.mmd`. Показывает три колонки: триггеры (cron/timer/watcher/manual) → автоматизации → что трогают (БД/сервисы/внешние API). Пунктир `-.запускает.->` от триггера к автоматизации, сплошная `-->` к тому, что трогает. Источник: `automations.md` (колонка `touches` даёт связи) + `cron.md` + `host-scripts.md` + `systemd-timers.txt` + `watchers.txt`.
-
-**Правила:**
-
-- Все плейсхолдеры `<...>` из шаблона должны быть заменены на реальные значения. Если данных нет — `<? уточнить>` (видно что незаполнено).
-- Стили (`classDef`) не трогать — единый визуальный язык.
-- Не удалять `%%` комментарии в начале файла — они нужны будущим читателям.
-- В конце каждой диаграммы — комментарий `%% Last updated: YYYY-MM-DD by /inventory-scan`.
-
-**Проверка валидности:** если установлен `mmdc` (mermaid CLI) — запустить `mmdc -i diagrams/<file>.mmd -o /tmp/test.svg` для каждой обновлённой диаграммы, убедиться что синтаксис валидный. Если `mmdc` не установлен — пропустить, только предупредить оператора одной строкой.
-
-**Поведение при первом запуске на сервере с уже существующим хаосом** (через `cleanup-existing-server`): шаблоны копируются с плейсхолдерами, заполняются настолько, насколько inventory заполнен. Дозаполнение — при следующих прогонах после `cleanup`.
 
 ## Шаг 5. Honest unknown — везде
 
@@ -277,8 +256,8 @@ find "$INVENTORY_DIR/hosts/<host>/snapshots/" -mindepth 1 -maxdepth 1 -type d \
   systemd-timers/watchers), а `inventory/hosts/$HOST_DIR/automations.md` отсутствует —
   отдельной строкой «автоматизации есть, витрина не создана → нужен Шаг 4»
 - Список drift'ов (если найдены) — с категориями + / - / ~; мнимый drift помечен отдельно
+- **Секция «Хлам»** (если чек Шага 3 что-то нашёл): каждая находка с предложением сноса
 - Список изменённых inventory-документов
-- **Список обновлённых mermaid-диаграмм** (`diagrams/topology.mmd`, и т.д.). Если первая инвентаризация и диаграммы созданы с нуля — отметить «созданы из шаблонов». Если есть автоматизации — отдельной строкой отметить `diagrams/automations.mmd` и группу `automations` в `topology.mmd`; если автоматизаций нет — отметить, что диаграмма автоматизаций не создана (нет данных).
 - Рекомендации, если нужно: что ещё проверить вручную
 
 Освобождаю конкурентный лок (взят на Шаге 1) — иначе следующий скан упрётся в «уже идёт»:

@@ -54,7 +54,7 @@ automations.md — сводная витрина ВСЕХ автоматизац
 запуска (cron + systemd-timer + watcher + webhook + ручной запуск). Агрегирует cron.md
 и host-scripts.md, добавляет timers/watchers — НЕ копирует их слово в слово.
 Колонка `touches` (что трогает: БД / сервис / внешний API) — источник связей для
-диаграммы automations.mmd. Значения trigger: cron / systemd-timer / watcher / webhook /
+сборщика дашборда (ADR-0019). Значения trigger: cron / systemd-timer / watcher / webhook /
 manual. status: active / failing / disabled / `? уточнить`.
 -->
 
