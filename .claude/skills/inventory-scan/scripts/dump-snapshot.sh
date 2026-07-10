@@ -272,9 +272,12 @@ run_remote "volumes.txt" \
 run_remote "host-resources.txt" \
     "echo '=== uptime ===' && uptime && echo '=== память ===' && free -h && echo '=== диск ===' && df -h && echo '=== открытые порты ===' && (ss -tulpn 2>/dev/null || netstat -tulpn 2>/dev/null || echo 'ss/netstat не найден') && echo '=== доступные обновления APT ===' && (apt list --upgradable 2>/dev/null | head -50 || echo 'apt не найден')"
 
-# 7. Cron-задачи
+# 7. Cron-задачи. Фикс 2026-07-10: раньше «crontab root» снимался БЕЗ sudo и
+#    показывал crontab SSH-пользователя (root-crontab с acme.sh выглядел пустым).
+#    Теперь: root через sudo -n (нет sudo → честная пометка), плюс crontab
+#    самого SSH-пользователя отдельной секцией.
 run_remote "crontab.txt" \
-    "echo '=== crontab root ===' && (crontab -l 2>/dev/null || echo 'пусто') && echo '=== /etc/cron.d/ ===' && (ls -la /etc/cron.d/ 2>/dev/null || echo 'пусто') && (cat /etc/cron.d/* 2>/dev/null || echo 'пусто')"
+    "echo '=== crontab root (sudo) ===' && (sudo -n crontab -l 2>/dev/null || echo 'нет данных: sudo -n недоступен или crontab пуст') && echo \"=== crontab \$(whoami) ===\" && (crontab -l 2>/dev/null || echo 'пусто') && echo '=== /etc/cron.d/ ===' && (ls -la /etc/cron.d/ 2>/dev/null || echo 'пусто') && (cat /etc/cron.d/* 2>/dev/null || echo 'пусто')"
 
 # 8. Nginx-конфигурация
 run_remote "nginx-sites.txt" \
@@ -286,12 +289,21 @@ run_remote "nginx-sites.txt" \
 #    срок истечения не считался вообще, хотя description обещает «даты валидности».
 #    Теперь openssl x509 -enddate прогоняется по обоим источникам. set +e — против
 #    спецсимволов в путях (фикс v2).
+#    Фикс 2026-07-10 (грабля Bronto): сертификаты могут жить где угодно
+#    (например /etc/nginx/ssl/), а acme.sh — у root. Главный источник теперь —
+#    фактические пути ssl_certificate из nginx -T (это то, чем сервер реально
+#    отвечает); letsencrypt/acme.sh (включая /root/.acme.sh через sudo -n) —
+#    дополнительные.
 run_remote "tls-certs.txt" \
     "set +e
+     echo '=== ssl_certificate из nginx -T (фактические) ==='
+     (sudo -n nginx -T 2>/dev/null || nginx -T 2>/dev/null) | grep -E '^\s*ssl_certificate\s' | awk '{print \$2}' | tr -d ';' | sort -u | while read f; do
+       echo \"--- \$f ---\"; (sudo -n openssl x509 -in \"\$f\" -noout -subject -enddate 2>/dev/null || openssl x509 -in \"\$f\" -noout -subject -enddate 2>/dev/null || echo 'нет чтения'); done
      echo '=== letsencrypt (/etc/letsencrypt/live) ==='
      find /etc/letsencrypt/live -name 'cert.pem' 2>/dev/null | while read f; do echo \"--- \$f ---\"; openssl x509 -in \"\$f\" -noout -subject -dates 2>/dev/null; done
-     echo '=== acme.sh (~/.acme.sh/*/fullchain.cer) ==='
+     echo '=== acme.sh (~/.acme.sh и /root/.acme.sh) ==='
      for f in ~/.acme.sh/*/fullchain.cer; do [ -f \"\$f\" ] || continue; echo \"--- \$f ---\"; openssl x509 -in \"\$f\" -noout -subject -enddate 2>/dev/null; done
+     sudo -n sh -c 'for f in /root/.acme.sh/*/fullchain.cer; do [ -f \"\$f\" ] || continue; echo \"--- \$f ---\"; openssl x509 -in \"\$f\" -noout -subject -enddate 2>/dev/null; done' 2>/dev/null
      true"
 
 # 10. Список хостовых скриптов (метаданные, без содержимого)
@@ -299,9 +311,14 @@ run_remote "tls-certs.txt" \
 #     код, и под set -o pipefail вся секция ложно помечалась как failed
 #     (граблекейс selectel: данные собирались, но в конец файла дописывался
 #     'ERROR: ...'). Honest-status: секция падает только при реальной ошибке.
+#     Фикс 2026-07-10 (грабля Bronto): скрипты IaC-раскладки живут глубже
+#     (/opt/infra/scripts/**), верхнеуровневый glob их не видел. Теперь find
+#     до 4 уровней с исключением тяжёлых каталогов приложений.
 run_remote "host-scripts-list.txt" \
     "set +e
-     ls -la /opt/*.sh /opt/*.py /opt/*.yml 2>/dev/null
+     echo '=== /opt (до 4 уровней, без node_modules/venv/.git) ==='
+     find /opt -maxdepth 4 \\( -name node_modules -o -name venv -o -name .git -o -name .cache \\) -prune -o -type f \\( -name '*.sh' -o -name '*.py' \\) -print 2>/dev/null | head -100 | xargs -r ls -la 2>/dev/null
+     echo '=== /usr/local/{bin,sbin} и /root/bin ==='
      ls -la /usr/local/bin/*.sh /usr/local/sbin/*.sh 2>/dev/null
      ls -la /root/bin/ 2>/dev/null
      true"
@@ -351,6 +368,25 @@ done'
 # 14. Включённые systemd-юниты (без штатных system-юнитов)
 run_remote "systemd-enabled.txt" \
     "systemctl list-unit-files --type=service --state=enabled 2>/dev/null | grep -vE '^(UNIT|[0-9]+ unit|systemd-|sys-|snap\\.)' | head -50"
+
+# 14b. Хост-сервисы вне Docker (фикс 2026-07-10, кейс newsforge: systemd-сервис
+#      с User= и venv был невидимкой — ни docker ps, ни compose его не знают).
+#      Собираем нештатные юниты из /etc/systemd/system: Description, User,
+#      ExecStart, состояние. Это источник секции «Хост-сервисы» в services.md.
+# shellcheck disable=SC2016
+run_remote "host-services.txt" \
+    'set +e
+echo "=== нештатные *.service в /etc/systemd/system ==="
+for f in /etc/systemd/system/*.service; do
+  [ -f "$f" ] || continue
+  base=$(basename "$f")
+  case "$base" in systemd-*|snap.*|sys-*|dbus-*|getty*|cloud-*) continue;; esac
+  echo "--- $base ---"
+  grep -E "^(Description|User|ExecStart)=" "$f" | head -5
+  echo "state: $(systemctl is-enabled "$base" 2>/dev/null) / $(systemctl is-active "$base" 2>/dev/null)"
+  echo ""
+done
+true'
 
 # 15. systemd-таймеры (расписание наравне с cron на Ubuntu 24.04) — таблица
 #     активных таймеров + содержимое *.timer-юнитов оператора (без штатной

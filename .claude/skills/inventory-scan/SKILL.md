@@ -37,8 +37,9 @@ inventory и выделяю drift'ы между документацией и р
 - Snapshot создан в `inventory/hosts/<host>/snapshots/YYYY-MM-DD/`
 - Snapshot содержит все ожидаемые файлы (containers, networks, volumes, host-resources,
   crontab, nginx-sites, tls-certs, host-scripts-content, host-env-redacted, cron-d-content,
-  systemd-enabled, systemd-timers, watchers, compose-files, containers-inspect.json,
-  health-flags) — проверяется по непустоте ключевых, не по суммарному размеру
+  systemd-enabled, systemd-timers, host-services, watchers, compose-files,
+  containers-inspect.json, health-flags) — проверяется по непустоте ключевых, не по
+  суммарному размеру
 - 9 inventory-документов в `inventory/hosts/<host>/` обновлены или созданы из шаблона
   (`automations.md` — только при наличии хоть одной автоматизации)
 - Drift между inventory и реальностью явно обозначен в `drift-report.md` свежего snapshot
@@ -111,12 +112,17 @@ bash scripts/dump-snapshot.sh "$SSH_HOST" "$SNAPSHOT_DATE" "$INVENTORY_DIR"
 - Docker-сети и volumes (`networks.txt`, `volumes.txt`)
 - Ресурсы хоста — uptime, память, диск, открытые порты, доступные APT-обновления
   (`host-resources.txt`)
-- Crontab + `/etc/cron.d/*` (`crontab.txt`, `cron-d-content.txt`)
+- Crontab root (через `sudo -n`) + crontab SSH-пользователя + `/etc/cron.d/*`
+  (`crontab.txt`, `cron-d-content.txt`)
 - nginx-конфиг через `nginx -T` (`nginx-sites.txt`)
-- TLS-сертификаты (letsencrypt + acme.sh) — **даты валидности** через `openssl x509`
-  (`tls-certs.txt`); openssl бежит по обоим источникам (фикс /retro)
-- Список и содержимое host-скриптов в `/opt/*.sh` (`host-scripts-list.txt`,
-  `host-scripts-content.txt`)
+- TLS-сертификаты — **даты валидности** через `openssl x509` (`tls-certs.txt`);
+  главный источник — фактические пути `ssl_certificate` из `nginx -T`, плюс
+  letsencrypt и acme.sh (включая `/root/.acme.sh` через `sudo -n`)
+- Список host-скриптов: `/opt` до 4 уровней без node_modules/venv (`host-scripts-list.txt`);
+  содержимое — верхнеуровневых `/opt/*.sh` (`host-scripts-content.txt`); глубокие
+  IaC-скрипты живут в git, их содержимое в снимок не тянем
+- Хост-сервисы вне Docker: нештатные systemd-юниты с Description/User/ExecStart и
+  состоянием (`host-services.txt`) — источник секции «Хост-сервисы» в `services.md`
 - Структура .env-файлов на хосте (имена переменных, значения redacted)
   (`host-env-redacted.txt`)
 - Включённые systemd-юниты (`systemd-enabled.txt`)
@@ -212,6 +218,11 @@ host-scripts / automations / server):
 Никогда не переписываю файл с нуля — теряется история ручных правок и комментариев
 оператора.
 
+**Хост-сервисы вне Docker** (из `host-services.txt`): нештатные systemd-юниты с `User=`
+веду в `services.md` отдельной секцией «Хост-сервисы (не Docker)» — имя, роль, как
+запущен, что трогает. Кейс-обоснование: сервис newsforge (systemd + venv) был невидимкой
+для docker ps и списка compose (incidents/2026-07-10-drop-database-newsbot.md инфры).
+
 **`automations.md` — сводная витрина (генерируется только при наличии автоматизаций).**
 Это «оглавление всего, что работает само». Колонки: `name | trigger | schedule | runs |
 touches | log | status`. Агрегирую данные из четырёх источников:
@@ -268,6 +279,22 @@ rm -rf "$LOCK"   # $INVENTORY_DIR/.scan.lock — снять в конце ИЛИ
 
 # Failed Attempts (граблекейс)
 
+- **«root-crontab выглядит пустым»** — ИСПРАВЛЕНО (скан Bronto 2026-07-10). Симптом:
+  секция «crontab root» пуста, хотя у root есть задания (автопродление acme.sh).
+  Причина: `crontab -l` без sudo читает crontab SSH-пользователя. Лечение: root через
+  `sudo -n crontab -l` + отдельная секция для crontab SSH-пользователя.
+- **«host-скрипты IaC-раскладки не видны»** — ИСПРАВЛЕНО (2026-07-10). Симптом:
+  `host-scripts-*` пустые, хотя скрипты есть. Причина: glob только `/opt/*.sh`, а
+  скрипты живут в `/opt/infra/scripts/**`. Лечение: `find /opt -maxdepth 4` с
+  исключением node_modules/venv/.git; содержимое глубоких не тянем (они в git).
+- **«TLS не найден, хотя сайт отвечает по HTTPS»** — ИСПРАВЛЕНО (2026-07-10). Симптом:
+  tls-certs.txt пуст при живом 443. Причина: сертификаты в нестандартном месте
+  (`/etc/nginx/ssl/`), acme.sh у root. Лечение: главный источник — пути
+  `ssl_certificate` из `nginx -T`; `/root/.acme.sh` через `sudo -n`.
+- **«хост-сервис вне Docker — невидимка»** — ИСПРАВЛЕНО (2026-07-10, кейс newsforge).
+  Симптом: работающий сервис отсутствует и в docker ps, и в compose-списке, и в
+  inventory. Лечение: новый сбор `host-services.txt` (нештатные systemd-юниты с
+  Description/User/ExecStart) + секция «Хост-сервисы» в services.md.
 - **«tls-certs.txt syntax error»** — известный баг dump-snapshot v1, в v2 исправлен
   через `set +e` вокруг openssl-вызова. Симптом: tls-certs.txt пустой или содержит
   «openssl: unknown option». Лечение: убедиться, что используется bundled
