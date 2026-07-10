@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-# Единая библиотека маскировки (канон redaction v2) — переиспользуем, не копируем.
+# Единая библиотека маскировки (канон redaction v2.1) — переиспользуем, не копируем.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REDACT_LIB="$SCRIPT_DIR/../../_lib/redact.sh"
 if [ -f "$REDACT_LIB" ]; then

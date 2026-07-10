@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# _lib/redact.sh — единая библиотека маскировки секретов (канон redaction v2).
+# _lib/redact.sh — единая библиотека маскировки секретов (канон redaction v2.1).
 #
 # Источник правды для ВСЕХ скиллов, которые пишут вывод серверных команд в файлы
 # или показывают его в сессии. Исторически функции жили в
@@ -33,6 +33,13 @@ redact_stream() {
     #    ALTER USER ... WITH PASSWORD '...' / IDENTIFIED BY '...' — правила 1-4
     #    их не ловят (нет '=' после слова PASSWORD).
     # 6. redis requirepass в выводе/эхо команд CONFIG SET requirepass <pw>.
+    # 7. Имена, оканчивающиеся на _PAT (GITHUB_PAT, GH_PAT): слово PAT нельзя класть
+    #    в правило 1 — как подстрока оно матчит PATH/XDG_DATA_PATH и калечит не-секреты;
+    #    поэтому отдельное правило с якорем на конец имени (боевой кейс 2026-07-10:
+    #    GITHUB_PAT утёк в containers-inspect.json открытым текстом).
+    # 8. GitHub-токены по ЗНАЧЕНИЮ, независимо от имени переменной: fine-grained
+    #    github_pat_* и классические ghp_/gho_/ghu_/ghs_/ghr_* — ловит токен голым
+    #    в логе, в аргументах команды, в label — там, где правил по имени нет.
     sed -E \
         -e 's/("?[A-Za-z0-9_]*(TOKEN|KEY|SECRET|PASSWORD|PASS|API|CREDENTIAL)[A-Za-z0-9_]*"?[[:space:]]*[=:][[:space:]]*"?)[^"[:space:],}]+/\1<REDACTED>/Ig' \
         -e 's#(([A-Za-z][A-Za-z0-9+.-]*)://[^:@/[:space:]]+:)[^@/[:space:]]+@#\1<REDACTED>@#g' \
@@ -40,7 +47,9 @@ redact_stream() {
         -e 's/(AKIA|ASIA)[A-Z0-9]{16}/<REDACTED>/g' \
         -e "s/(PASSWORD[[:space:]]+')[^']*(')/\1<REDACTED>\2/Ig" \
         -e "s/(IDENTIFIED[[:space:]]+BY[[:space:]]+')[^']*(')/\1<REDACTED>\2/Ig" \
-        -e 's/(requirepass[[:space:]]+)[^[:space:]"]+/\1<REDACTED>/Ig'
+        -e 's/(requirepass[[:space:]]+)[^[:space:]"]+/\1<REDACTED>/Ig' \
+        -e 's/("?[A-Za-z0-9_]*_PAT"?[[:space:]]*[=:][[:space:]]*"?)[^"[:space:],}]+/\1<REDACTED>/Ig' \
+        -e 's/(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{36,})/<REDACTED>/g'
 }
 
 # Маскировка JSON через jq, если он доступен: значения .Config.Env и .Env,
@@ -51,13 +60,15 @@ redact_stream() {
 # ВАЖНО: один лишь jq НЕ ловит пароль внутри URL (DATABASE_URL=postgres://u:pass@host)
 # — имя переменной не матчит секрет-паттерн, и строка остаётся нетронутой
 # (проверено тестом: пароль утекал). Поэтому ПОСЛЕ структурной маскировки
-# прогоняем вывод jq через тот же URL-паттерн, что и построчный fallback.
+# прогоняем вывод jq через тот же URL-паттерн, что и построчный fallback,
+# плюс value-паттерн GitHub-токенов: jq маскирует только Env, а токен может
+# лежать в Cmd/Entrypoint/Labels — там его ловим по значению.
 redact_json_with_jq() {
     jq '
       def redact_env:
         if . == null then .
         else map(
-          if test("^[^=]*(TOKEN|KEY|SECRET|PASSWORD|PASS|API)[^=]*=" ; "i")
+          if test("^[^=]*((TOKEN|KEY|SECRET|PASSWORD|PASS|API|CREDENTIAL)[^=]*|_PAT)=" ; "i")
           then sub("=.*"; "=<REDACTED>")
           else .
           end
@@ -65,5 +76,7 @@ redact_json_with_jq() {
         end;
       (.. | objects | select(has("Env")) | .Env) |= redact_env
     ' 2>/dev/null \
-    | sed -E "s#(([A-Za-z][A-Za-z0-9+.-]*)://[^:@/[:space:]]+:)[^@/[:space:]\"]+@#\1<REDACTED>@#g"
+    | sed -E \
+        -e "s#(([A-Za-z][A-Za-z0-9+.-]*)://[^:@/[:space:]]+:)[^@/[:space:]\"]+@#\1<REDACTED>@#g" \
+        -e 's/(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{36,})/<REDACTED>/g'
 }

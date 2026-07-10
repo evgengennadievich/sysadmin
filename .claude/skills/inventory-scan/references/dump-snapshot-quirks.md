@@ -119,9 +119,9 @@ gitleaks. Файл `containers-inspect.json` всегда даёт ~40 false pos
 в коммит (`git add -A`), bug-report или rsync-бэкап — а `.gitignore` это
 лишь последний рубеж, не основная защита.
 
-**Исправлено в коде (redaction v2).** `dump-snapshot.sh` теперь маскирует
-секреты **до записи на диск**, а не полагается только на `.gitignore`.
-Маскировка закрывает четыре паттерна:
+**Исправлено в коде (redaction v2, расширено v2.1).** `dump-snapshot.sh` теперь
+маскирует секреты **до записи на диск**, а не полагается только на `.gitignore`.
+Маскировка закрывает шесть паттернов:
 1. `KEY=value`, где секрет-слово (`TOKEN/KEY/SECRET/PASSWORD/PASS/API/CREDENTIAL`,
    case-insensitive) стоит **где угодно в имени** переменной (не только в конце) →
    `KEY=<REDACTED>` (имя сохраняется для аудита). Так ловятся и `AWS_ACCESS_KEY_ID=`,
@@ -131,6 +131,16 @@ gitleaks. Файл `containers-inspect.json` всегда даёт ~40 false pos
 4. AWS access key ID по значению: `AKIA`/`ASIA` + 16 символов `[A-Z0-9]` →
    `<REDACTED>` (ловит идентификатор даже голым в логе, без обёртки `KEY=`).
    Паттерн без `\b` — `\b` не работает в BSD sed на macOS (кросс-платформенность).
+5. Имена на `*_PAT` (`GITHUB_PAT=`, `GH_PAT=`) — отдельное правило с якорем на
+   конец имени: слово `PAT` в список правила 1 класть нельзя, как подстрока оно
+   матчит `PATH`/`XDG_DATA_PATH` и калечит не-секреты. Боевой кейс 2026-07-10:
+   `GITHUB_PAT` лежал открытым текстом в `containers-inspect.json` восьми снимков
+   (Bronto + старый сервер) при честном `redaction_applied: true`; найден при
+   подготовке сборщика infra-dashboard (v2.1).
+6. GitHub-токены по значению (`github_pat_*`, классические `ghp_/gho_/ghu_/ghs_/ghr_*`) —
+   независимо от имени переменной. В jq-пути этот же паттерн прогоняется после
+   структурной маскировки: jq маскирует только `Env`, а токен в
+   `Cmd`/`Entrypoint`/`Labels` ловится лишь по значению (v2.1).
 
 Реализация — **без жёсткой зависимости от `jq`** (его часто нет на
 macOS/Git-for-Windows у оператора, через которого проходит snapshot,
@@ -141,8 +151,9 @@ redaction `.Config.Env`; если нет — построчный fallback на 
 URL утекал бы — проверено тестом).
 
 В снимке рядом — метки в `meta.txt`: `redaction_applied: true`,
-`redaction_version: v2`, `redaction_tool: jq|sed-fallback` — при ревью
-сразу видно, что данные не raw.
+`redaction_version: v2.1`, `redaction_tool: jq|sed-fallback` — при ревью
+сразу видно, что данные не raw (снимки со старой меткой `v2` сделаны до
+паттернов 5-6 — `*_PAT` и GitHub-токены в них надо проверять руками).
 
 **Что осталось на операторе:**
 1. Файл всё равно лежит в `inventory/hosts/<host>/snapshots/<DATE>/` —

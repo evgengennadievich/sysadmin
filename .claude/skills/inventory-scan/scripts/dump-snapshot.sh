@@ -5,10 +5,11 @@
 # состояния: контейнеры, compose-файлы, сети, тома, ресурсы хоста, cron, nginx,
 # TLS-сертификаты, host-scripts, .env (redacted), systemd-юниты, доступные апдейты.
 #
-# БЕЗОПАСНОСТЬ (redaction v2): секреты в env контейнеров (docker inspect) и в
+# БЕЗОПАСНОСТЬ (redaction v2.1): секреты в env контейнеров (docker inspect) и в
 # .env-файлах хоста маскируются ДО записи на диск — KEY=value с секрет-именами
-# и креды в URL (scheme://user:pass@host) заменяются на <REDACTED>. Имена
-# переменных сохраняются для аудита. См. meta.txt (redaction_applied) и
+# (включая *_PAT), GitHub-токены по значению и креды в URL
+# (scheme://user:pass@host) заменяются на <REDACTED>. Имена переменных
+# сохраняются для аудита. См. meta.txt (redaction_applied) и
 # references/dump-snapshot-quirks.md.
 #
 # Использование:
@@ -24,11 +25,11 @@
 #   bash dump-snapshot.sh root@10.0.0.1 2026-01-01       # произвольный сервер и дата
 #   bash dump-snapshot.sh prod today /tmp/inv            # альтернативный INVENTORY_DIR
 #
-# Создаёт ~16 файлов в ${INVENTORY_DIR}/hosts/<HOST_DIR>/snapshots/<DATE>/
-# (containers, networks, volumes, host-resources, crontab, nginx-sites, tls-certs,
-#  host-scripts-list, host-scripts-content, host-env-redacted, cron-d-content,
-#  systemd-enabled, systemd-timers, watchers, compose-files,
-#  containers-inspect.json, meta.txt).
+# Создаёт 19 файлов в ${INVENTORY_DIR}/hosts/<HOST_DIR>/snapshots/<DATE>/ —
+# 18 контентных (containers, containers-inspect.json, compose-files, networks,
+#  volumes, host-resources, crontab, cron-d-content, nginx-sites, tls-certs,
+#  host-scripts-list, host-scripts-content, host-env-redacted, systemd-enabled,
+#  host-services, systemd-timers, watchers, health-flags) плюс meta.txt.
 
 set -euo pipefail
 
@@ -147,9 +148,9 @@ mkdir -p "$SNAPSHOT_DIR"
 # секреты ДО записи на диск — а не надеемся только на .gitignore (последний
 # рубеж, не основная защита).
 #
-# Закрываем ДВА паттерна, оба зафиксированы в references/dump-snapshot-quirks.md:
-#   1. KEY=value   — env-переменные вида OPENROUTER_API_KEY=sk-or-v1-...
-#   2. url://user:pass@host — пароль внутри connection-string (postgres://, redis://, amqp://...)
+# Классы паттернов зафиксированы в references/dump-snapshot-quirks.md (шесть):
+# KEY=value с секрет-именами (включая *_PAT), креды в URL, секреты в query-string,
+# AWS-ключи по значению, SQL-пароли, GitHub-токены по значению.
 #
 # Без жёсткой зависимости от jq (его часто нет на macOS/Git-for-Windows у
 # оператора, через которого проходит snapshot — см. инцидент Windows-портабельности).
@@ -157,10 +158,10 @@ mkdir -p "$SNAPSHOT_DIR"
 # если нет — построчный fallback на sed/grep, работающий везде. Защита не
 # должна зависеть от того, что доустановил оператор.
 
-REDACTION_VERSION="v2"
+REDACTION_VERSION="v2.1"
 
 # Функции маскировки redact_stream / redact_json_with_jq живут в единой
-# библиотеке _lib/redact.sh (канон redaction v2) — её же используют
+# библиотеке _lib/redact.sh (канон redaction v2.1) — её же используют
 # rotate-secrets и другие скиллы. Не дублируем код: при изменении паттернов
 # правится ОДНО место. Если библиотека не найдена — fail-fast: молча писать
 # снимок без маскировки нельзя (приоритет №1 — секреты не утекают).
@@ -234,7 +235,7 @@ redaction_version: ${REDACTION_VERSION}
 redaction_tool: ${REDACTION_TOOL}
 METATXT
 
-# === 17 контентных файлов снимка (16 + health-flags.txt) ===
+# === 18 контентных файлов снимка (полный список — в шапке скрипта) ===
 
 # 1. Список контейнеров
 run_remote "containers.txt" \
