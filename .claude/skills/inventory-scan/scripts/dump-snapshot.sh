@@ -25,11 +25,16 @@
 #   bash dump-snapshot.sh root@10.0.0.1 2026-01-01       # произвольный сервер и дата
 #   bash dump-snapshot.sh prod today /tmp/inv            # альтернативный INVENTORY_DIR
 #
-# Создаёт 19 файлов в ${INVENTORY_DIR}/hosts/<HOST_DIR>/snapshots/<DATE>/ —
-# 18 контентных (containers, containers-inspect.json, compose-files, networks,
-#  volumes, host-resources, crontab, cron-d-content, nginx-sites, tls-certs,
+# Создаёт 20 файлов в ${INVENTORY_DIR}/hosts/<HOST_DIR>/snapshots/<DATE>/ —
+# 19 контентных (containers, containers-inspect.json, compose-files, networks,
+#  volumes, firewall, host-resources, crontab, cron-d-content, nginx-sites, tls-certs,
 #  host-scripts-list, host-scripts-content, host-env-redacted, systemd-enabled,
 #  host-services, systemd-timers, watchers, health-flags) плюс meta.txt.
+#
+# DOCKER НЕ ОБЯЗАТЕЛЕН (ADR-0024). Нет Docker → host_kind=native в meta.txt, четыре
+# секции контейнеров содержат маркер `NOT_APPLICABLE: ...` (файлы создаются всегда,
+# чтобы verify не счёл снимок битым), остальное собирается полностью: systemd, порты,
+# nginx, TLS, firewall, cron, host-scripts.
 
 set -euo pipefail
 
@@ -79,15 +84,35 @@ echo "======================================================"
 echo ""
 echo "Проверка предусловий..."
 
+# Docker — НЕ обязательное условие снимка (ADR-0024). На нативных хостах (VPN-сервер
+# с 3X-UI + nginx, одиночный сервис) контейнеров нет вовсе, а сервисы прекрасно видны
+# через systemd/ss/nginx. Раньше здесь был fail-fast «нет Docker → exit 1», и такие
+# хосты вообще не могли получить inventory. Теперь определяем и адаптируемся: секции
+# контейнеров помечаются как неприменимые, остальной снимок собирается полностью.
+#
+# Три состояния, а не два (вскрылось живым прогоном): CLI может быть установлен, а демон
+# лежать — тогда «docker-хост» с пустыми секциями врал бы дважды. Различаем:
+#   yes  — CLI есть и демон отвечает           → host_kind=docker
+#   down — CLI есть, демон не отвечает         → host_kind=docker-down (секции пропущены,
+#                                                 но хост НЕ называем нативным)
+#   no   — CLI нет вовсе                        → host_kind=native
+HAS_DOCKER=no
+DOCKER_NOTE=""
+
 if [ "$SERVER" = "local" ]; then
     # Локальный режим — без SSH
-    if ! command -v docker &>/dev/null; then
-        echo ""
-        echo "ОШИБКА: Docker не найден на локальной машине."
-        echo "Установи Docker: https://docs.docker.com/engine/install/"
-        exit 1
+    if command -v docker &>/dev/null; then
+        if docker info >/dev/null 2>&1; then
+            HAS_DOCKER=yes
+            echo "  [OK] Docker доступен локально"
+        else
+            HAS_DOCKER=down
+            DOCKER_NOTE="Docker CLI установлен, но демон не отвечает (docker info)"
+            echo "  [WARN] ${DOCKER_NOTE} — секции контейнеров пропускаю"
+        fi
+    else
+        echo "  [INFO] Docker не найден — режим нативного хоста (секции контейнеров пропускаю)"
     fi
-    echo "  [OK] Docker доступен локально"
     echo "  [OK] Режим: локальный (без SSH)"
     run_cmd() { eval "$1"; }
 else
@@ -107,15 +132,21 @@ else
     fi
     echo "  [OK] SSH-доступ к ${SERVER} есть"
 
-    # 2. Проверка Docker на сервере
-    if ! ssh -o ConnectTimeout=10 "$SERVER" 'command -v docker' >/dev/null 2>&1; then
-        echo ""
-        echo "ОШИБКА: Docker не найден на сервере ${SERVER}."
-        echo "Docker не установлен — снимок контейнеров невозможен."
-        echo "Установи Docker: https://docs.docker.com/engine/install/"
-        exit 1
+    # 2. Определение Docker на сервере (не условие, а факт — см. HAS_DOCKER выше)
+    if ssh -o ConnectTimeout=10 "$SERVER" 'command -v docker' >/dev/null 2>&1; then
+        if ssh -o ConnectTimeout=10 "$SERVER" 'docker info' >/dev/null 2>&1; then
+            HAS_DOCKER=yes
+            echo "  [OK] Docker найден на сервере"
+        else
+            HAS_DOCKER=down
+            DOCKER_NOTE="Docker CLI на ${SERVER} есть, но демон не отвечает (docker info)"
+            echo "  [WARN] ${DOCKER_NOTE}"
+            echo "         Секции контейнеров пропускаю; это НЕ нативный хост — проверь службу docker."
+        fi
+    else
+        echo "  [INFO] Docker на ${SERVER} не найден — режим нативного хоста"
+        echo "         (снимок соберётся по systemd/ss/nginx/firewall, секции контейнеров пропускаю)"
     fi
-    echo "  [OK] Docker найден на сервере"
 
     # 3. Проверка версии bash на сервере (мягкое предупреждение)
     REMOTE_BASH_VER=$(ssh -o ConnectTimeout=10 "$SERVER" \
@@ -221,6 +252,14 @@ run_remote() {
 }
 
 # === Заголовочный файл meta.txt ===
+# HOST_KIND считаем ЗДЕСЬ, а не подстановкой внутри heredoc: `case` с его `)` и `;;`
+# ломает разбор $( ) в heredoc (проявилось живым прогоном — в meta.txt уезжал кусок кода).
+case "$HAS_DOCKER" in
+    yes)  HOST_KIND="docker" ;;
+    down) HOST_KIND="docker-down" ;;
+    *)    HOST_KIND="native" ;;
+esac
+
 echo "  -> meta.txt..."
 cat > "${SNAPSHOT_DIR}/meta.txt" <<METATXT
 snapshot_date: ${DATE}
@@ -229,45 +268,90 @@ server: ${SERVER}
 host_dir: ${HOST_DIR}
 inventory_dir: ${INVENTORY_DIR}
 taken_by: $(whoami)
+has_docker: ${HAS_DOCKER}
+host_kind: ${HOST_KIND}
+docker_note: ${DOCKER_NOTE:-—}
 script_version: bundled-v2
 redaction_applied: true
 redaction_version: ${REDACTION_VERSION}
 redaction_tool: ${REDACTION_TOOL}
 METATXT
 
-# === 18 контентных файлов снимка (полный список — в шапке скрипта) ===
+# === 19 контентных файлов снимка (полный список — в шапке скрипта) ===
 
-# 1. Список контейнеров
-run_remote "containers.txt" \
-    "docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'"
+# Заглушка для неприменимой секции: файл ВСЕГДА создаётся (иначе verify скилла
+# посчитает снимок битым и агент решит, что сбор провалился), но говорит прямо —
+# данных нет и почему. Машинно-читаемый маркер в первой строке.
+skip_section() {   # $1 = имя файла, $2 = причина
+    printf 'NOT_APPLICABLE: %s\n' "$2" > "${SNAPSHOT_DIR}/$1"
+    echo "  -> $1 (пропущено: $2)"
+}
 
-# 2. Полный inspect всех контейнеров (env, mounts, networks) — С REDACTION.
-#    Сырой docker inspect содержит env-переменные контейнеров открытым текстом
-#    (API-ключи, токены ботов, пароли БД). Маскируем секреты ДО записи на диск.
-#    jq-путь (structurally-aware) с fallback на построчный sed.
-echo "  -> containers-inspect.json (redacted: ${REDACTION_TOOL})..."
-INSPECT_RAW=$(run_cmd "docker ps -a -q | xargs docker inspect 2>/dev/null || echo '[]'" 2>/dev/null || echo '[]')
-if [ "$REDACTION_TOOL" = "jq" ]; then
-    # Пробуем jq; если он не распарсил (битый JSON) — падаем в построчный fallback.
-    if ! printf '%s' "$INSPECT_RAW" | redact_json_with_jq > "${SNAPSHOT_DIR}/containers-inspect.json" 2>/dev/null \
-       || [ ! -s "${SNAPSHOT_DIR}/containers-inspect.json" ]; then
+if [ "$HAS_DOCKER" = yes ]; then
+    # 1. Список контейнеров
+    run_remote "containers.txt" \
+        "docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'"
+
+    # 2. Полный inspect всех контейнеров (env, mounts, networks) — С REDACTION.
+    #    Сырой docker inspect содержит env-переменные контейнеров открытым текстом
+    #    (API-ключи, токены ботов, пароли БД). Маскируем секреты ДО записи на диск.
+    #    jq-путь (structurally-aware) с fallback на построчный sed.
+    echo "  -> containers-inspect.json (redacted: ${REDACTION_TOOL})..."
+    INSPECT_RAW=$(run_cmd "docker ps -a -q | xargs docker inspect 2>/dev/null || echo '[]'" 2>/dev/null || echo '[]')
+    if [ "$REDACTION_TOOL" = "jq" ]; then
+        # Пробуем jq; если он не распарсил (битый JSON) — падаем в построчный fallback.
+        if ! printf '%s' "$INSPECT_RAW" | redact_json_with_jq > "${SNAPSHOT_DIR}/containers-inspect.json" 2>/dev/null \
+           || [ ! -s "${SNAPSHOT_DIR}/containers-inspect.json" ]; then
+            printf '%s' "$INSPECT_RAW" | redact_stream > "${SNAPSHOT_DIR}/containers-inspect.json"
+        fi
+    else
         printf '%s' "$INSPECT_RAW" | redact_stream > "${SNAPSHOT_DIR}/containers-inspect.json"
     fi
+
+    # 3. Список compose-файлов на сервере
+    run_remote "compose-files.txt" \
+        "find /opt -name 'docker-compose.yml' -o -name 'docker-compose.yaml' 2>/dev/null | sort"
+
+    # 4. Docker-сети
+    run_remote "networks.txt" \
+        "docker network ls && echo '---' && docker network ls -q | xargs docker network inspect --format '{{.Name}}: {{.IPAM.Config}}' 2>/dev/null"
+
+    # 5. Docker-тома
+    run_remote "volumes.txt" \
+        "docker volume ls && echo '---' && docker system df -v 2>/dev/null"
 else
-    printf '%s' "$INSPECT_RAW" | redact_stream > "${SNAPSHOT_DIR}/containers-inspect.json"
+    # Нативный хост: контейнеров нет как класса. Сервисы этого хоста собираются
+    # ниже — systemd (host-services/systemd-enabled/systemd-timers), порты
+    # (host-resources), nginx (nginx-sites), TLS (tls-certs), firewall.
+    if [ "$HAS_DOCKER" = down ]; then
+        R="${DOCKER_NOTE} — контейнеры снять нельзя, состояние неизвестно (host_kind=docker-down)"
+    else
+        R="Docker на хосте не установлен (нативный хост, host_kind=native)"
+    fi
+    skip_section "containers.txt"           "$R"
+    skip_section "compose-files.txt"        "$R"
+    skip_section "networks.txt"             "$R"
+    skip_section "volumes.txt"              "$R"
+    printf '[]\n' > "${SNAPSHOT_DIR}/containers-inspect.json"
+    echo "  -> containers-inspect.json (пустой массив: $R)"
 fi
 
-# 3. Список compose-файлов на сервере
-run_remote "compose-files.txt" \
-    "find /opt -name 'docker-compose.yml' -o -name 'docker-compose.yaml' 2>/dev/null | sort"
-
-# 4. Docker-сети
-run_remote "networks.txt" \
-    "docker network ls && echo '---' && docker network ls -q | xargs docker network inspect --format '{{.Name}}: {{.IPAM.Config}}' 2>/dev/null"
-
-# 5. Docker-тома
-run_remote "volumes.txt" \
-    "docker volume ls && echo '---' && docker system df -v 2>/dev/null"
+# 5а. Firewall — правила UFW либо сырые iptables (ADR-0024). На нативном хосте это
+#     главный источник «что открыто наружу»: без Docker-портов картина доступности
+#     складывается из ss + firewall. Docker-хостам полезно не меньше (docker publish
+#     обходит UFW — расхождение видно только при наличии обоих срезов).
+#     set +e и фолбэки: на хосте без ufw/iptables снимок не должен падать.
+run_remote "firewall.txt" \
+    "set +e
+     echo '=== ufw status verbose ==='
+     (sudo -n ufw status verbose 2>/dev/null || ufw status verbose 2>/dev/null || echo 'ufw недоступен (нет прав или не установлен)')
+     echo
+     echo '=== iptables -S (filter) ==='
+     (sudo -n iptables -S 2>/dev/null || iptables -S 2>/dev/null || echo 'iptables недоступен (нет прав или не установлен)')
+     echo
+     echo '=== nftables ruleset (если используется) ==='
+     (sudo -n nft list ruleset 2>/dev/null | head -60 || echo 'nft недоступен')
+     true"
 
 # 6. Ресурсы хоста (uptime, память, диск, порты, обновления APT)
 run_remote "host-resources.txt" \
@@ -445,8 +529,14 @@ run_remote "health-flags.txt" \
      free | awk '/Swap:/{t=\$2;u=\$3; if(t>0) print \"swap_used_pct=\" int(u*100/t); else print \"swap_used_pct=0 (swap off)\"}'
      df -P / | awk 'NR==2{print \"root_used_pct=\" \$5}'
      uptime | grep -oE 'load average.*' | sed 's/load average://; s/^/loadavg=/'
-     echo \"exited_containers=\$(docker ps -aq --filter status=exited 2>/dev/null | wc -l | tr -d ' ')\"
-     echo \"oom137_containers=\$(docker ps -a --filter exited=137 --format '{{.Names}}' 2>/dev/null | tr '\\n' ' ')\"
+     if command -v docker >/dev/null 2>&1; then
+       echo \"exited_containers=\$(docker ps -aq --filter status=exited 2>/dev/null | wc -l | tr -d ' ')\"
+       echo \"oom137_containers=\$(docker ps -a --filter exited=137 --format '{{.Names}}' 2>/dev/null | tr '\\n' ' ')\"
+     else
+       echo 'exited_containers=n/a (нативный хост, Docker не установлен)'
+       echo 'oom137_containers=n/a (нативный хост, Docker не установлен)'
+     fi
+     echo \"failed_units=\$(systemctl list-units --state=failed --no-legend 2>/dev/null | wc -l | tr -d ' ')\"
      echo \"apt_upgradable=\$(apt list --upgradable 2>/dev/null | grep -c upgradable)\"
      echo \"apt_security=\$(apt list --upgradable 2>/dev/null | grep -ci security)\"
      true"

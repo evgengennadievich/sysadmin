@@ -6,6 +6,9 @@ description: |
   Сравнение с прошлым inventory с выделением drift'ов + чек «хлам» (сироты-volume, сети вне
   эталона, дубли compose). Диаграммы не генерирует (ADR-0019: источник фактов — снимок,
   витрина — дашборд). Green Zone.
+  Работает и на хостах БЕЗ Docker (нативный VPS: 3X-UI, nginx, systemd-сервисы) — снимок
+  собирается по systemd/портам/nginx/TLS/firewall, секции контейнеров помечаются
+  неприменимыми (ADR-0024).
   Триггеры: «инвентаризация», «снять снимок сервера», «что у меня на сервере», «обновить inventory»,
   «scan server», «inventory drift», «refresh inventory».
   НЕ для изменений на сервере (это cleanup-existing-server и др.); НЕ для аудита безопасности
@@ -22,8 +25,21 @@ inventory и выделяю drift'ы между документацией и р
 <context>
 Что предполагается:
 - SSH-доступ к серверу настроен (агентский ключ, BatchMode=yes работает)
-- Docker установлен и работает на сервере
 - Структура `inventory/hosts/<host>/` существует или будет создана при первом запуске
+
+**Docker НЕ обязателен (ADR-0024).** Нативный VPS без Docker (VPN-сервер с 3X-UI + nginx,
+одиночный сервис) снимается полностью — по systemd, портам, nginx, TLS, firewall, cron.
+`meta.txt` объявляет тип хоста:
+
+| `host_kind` | Что значит | Секции контейнеров |
+|---|---|---|
+| `docker` | Docker есть, демон отвечает | собраны |
+| `native` | Docker не установлен | `NOT_APPLICABLE: …` — контейнеров нет как класса |
+| `docker-down` | CLI есть, демон не отвечает | `NOT_APPLICABLE: …` — состояние НЕИЗВЕСТНО |
+
+Разница `native` и `docker-down` принципиальна: в первом случае «контейнеров нет» — факт,
+во втором — слепая зона. `docker-down` на боевом хосте упоминаю оператору как проблему
+(служба docker лежит), а не как особенность инвентаря.
 
 Что НЕ предполагается:
 - Mock-сервер или dry-run — скилл нужен для реального снимка реальности
@@ -137,16 +153,30 @@ bash scripts/dump-snapshot.sh "$SSH_HOST" "$SNAPSHOT_DATE" "$INVENTORY_DIR"
 норма, а не сбой (порог «≥1 МБ» давал false-negative на валидном снимке 324 КБ — находка
 /retro). Проверяю непустоту ключевых файлов и парсинг JSON:
 
+Набор ключевых файлов зависит от типа хоста (ADR-0024): на нативном требовать непустой
+`containers.txt` бессмысленно — там законная заглушка `NOT_APPLICABLE`.
+
 ```bash
 SNAPSHOT_DIR="$INVENTORY_DIR/hosts/$HOST_DIR/snapshots/$SNAPSHOT_DATE"
 ok=1
-for f in containers.txt networks.txt host-resources.txt; do
+HOST_KIND=$(grep '^host_kind:' "$SNAPSHOT_DIR/meta.txt" | awk '{print $2}')
+
+# Общие для любого хоста: ресурсы, systemd-сервисы, firewall
+KEY_FILES="host-resources.txt host-services.txt firewall.txt"
+# Контейнерные — только там, где Docker реально работает
+[ "$HOST_KIND" = "docker" ] && KEY_FILES="$KEY_FILES containers.txt networks.txt"
+
+for f in $KEY_FILES; do
   [ -s "$SNAPSHOT_DIR/$f" ] || { echo "ОШИБКА: пустой ключевой файл $f"; ok=0; }
 done
 jq -e . "$SNAPSHOT_DIR/containers-inspect.json" >/dev/null 2>&1 \
   || { echo "ОШИБКА: containers-inspect.json не парсится"; ok=0; }
 [ "$ok" = 1 ] || { echo "ОШИБКА: snapshot неполный"; exit 1; }
+echo "Снимок валиден (host_kind=$HOST_KIND)"
 ```
+
+Регрессионный тест сбора на хосте без Docker — `tests/test-native-host.sh` (прогон вручную:
+`bash .claude/skills/inventory-scan/tests/test-native-host.sh`).
 
 Где `$HOST_DIR` = канон из `infra-config.json` (`prod-<ip>` для удалённых или
 `local-<hostname>` для локальной машины).
@@ -222,6 +252,17 @@ host-scripts / automations / server):
 веду в `services.md` отдельной секцией «Хост-сервисы (не Docker)» — имя, роль, как
 запущен, что трогает. Кейс-обоснование: сервис newsforge (systemd + venv) был невидимкой
 для docker ps и списка compose (incidents/2026-07-10-drop-database-newsbot.md инфры).
+
+**Нативный хост (`host_kind=native`, ADR-0024) — что писать в документы:**
+- `services.md` строю **целиком** из `host-services.txt` + `systemd-enabled.txt` +
+  портов из `host-resources.txt`; секция контейнеров не пустая заглушка, а честная строка
+  «Docker на хосте не установлен — сервисы работают нативно (systemd)».
+- `networks.md` / `volumes.md`: вместо Docker-сущностей описываю сетевую картину хоста —
+  слушающие порты (`ss`), правила firewall (`firewall.txt`), какие адреса наружу.
+  Пустой документ не оставляю: «нет данных» и «нечего показывать» — разные вещи (C.2).
+- `host_kind=docker-down` — **не** пишу «контейнеров нет». Пишу «состояние контейнеров снять
+  не удалось: демон Docker не отвечает», прежние записи о контейнерах НЕ удаляю и поднимаю
+  оператору как проблему хоста, а не как факт инвентаря.
 
 **`automations.md` — сводная витрина (генерируется только при наличии автоматизаций).**
 Это «оглавление всего, что работает само». Колонки: `name | trigger | schedule | runs |
@@ -320,6 +361,13 @@ rm -rf "$LOCK"   # $INVENTORY_DIR/.scan.lock — снять в конце ИЛИ
   2026-06-14). Симптом: алиас `selectel` → папка `prod-selectel` вместо записанной
   `prod-82.148.28.22`. Лечение: канон из `infra-config.json` `servers[].alias` через env
   `HOST_DIR`; при расхождении с SSH-target скрипт громко предупреждает и берёт канон.
+- **«хост без Docker не мог получить inventory вовсе»** — ИСПРАВЛЕНО (2026-07-24, кейс
+  ученика: нативный VPS с 3X-UI + nginx). Симптом: `dump-snapshot.sh` делал fail-fast
+  «Docker не найден → exit 1», и владельцу нативного сервера оставалась только ручная
+  сверка. Лечение (ADR-0024): Docker — определяемое свойство (`host_kind` = `docker` /
+  `native` / `docker-down`), секции контейнеров помечаются `NOT_APPLICABLE`, добавлена
+  секция `firewall.txt`, verify зависит от типа хоста. Регрессия закрыта
+  `tests/test-native-host.sh`.
 - **«verify заваливал валидный малый снимок»** — ИСПРАВЛЕНО (находка /retro 2026-06-14).
   Симптом: порог «размер ≥1 МБ» — false-negative на снимке 324 КБ. Лечение: проверка
   непустоты ключевых файлов + парсинг `containers-inspect.json` через jq, не суммарный размер.
