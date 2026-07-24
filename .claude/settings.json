@@ -12,6 +12,17 @@
             "statusMessage": "Проверяю зону операции…"
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "g=\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/retro-finding-gate.sh\"; if [ -f \"$g\" ]; then bash \"$g\"; else cat >/dev/null; fi",
+            "timeout": 15,
+            "statusMessage": "Проверяю основание находки…"
+          }
+        ]
       }
     ]
   }
