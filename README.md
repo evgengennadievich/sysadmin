@@ -165,6 +165,12 @@ sysadmin/                          ← публичный репо (этот). �
 │   ├── agents/
 │   │   ├── sysadmin.md            ← тонкая заглушка-указатель на CLAUDE.md (для @sysadmin из чужих папок)
 │   │   └── references/            ← 9 references (trust-zones, cold-start, vpn-reflexes, ...)
+│   ├── hooks/                     ← ★ ЗАМКИ: правила, подпёртые кодом (ADR-0021/0022/0023)
+│   │   ├── red-zone-guard.sh      ← необратимая команда не выполнится без твоей фразы
+│   │   ├── retro-finding-gate.sh  ← находка /retro не запишется без основания «факт/гипотеза»
+│   │   ├── inventory-sync-guard.sh← менял инфру и не обновил inventory → ответ не завершится
+│   │   └── tests/                 ← 49 тестов замков (прогон вручную, bash <файл>)
+│   ├── settings.json              ← подключение замков (едет вместе с репо, включать не надо)
 │   ├── knowledge/                 ← общие доменные знания (ADR-0003)
 │   │   └── networking/            ← VPN-домен в 3 слоях (ADR-0006)
 │   │       ├── _live/             ← фронт борьбы по странам (RU/CN/IR/BY) + timeline, TTL 14 дней
