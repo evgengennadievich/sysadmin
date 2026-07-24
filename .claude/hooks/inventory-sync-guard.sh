@@ -108,6 +108,24 @@ CHANGE_RE = re.compile(
 
 INVENTORY_RE = re.compile(r"inventory[/\\]|/infra/.*\.md$|refresh\.sh|dump-snapshot", re.IGNORECASE)
 
+# Сегменты, начинающиеся с read-only утилиты, изменением не считаются: их аргументы —
+# данные, а не команды. Без этого `grep -n "crontab" file` числился правкой инфраструктуры
+# (холостая остановка в разборе 2026-07-24, F4+).
+READONLY_LEAD = re.compile(
+    r"^(grep|egrep|fgrep|rg|ag|echo|printf|cat|bat|less|more|head|tail|wc|jq|yq|sort|uniq"
+    r"|column|diff|comm|man|which|type|file|stat|basename|dirname)(\s|$)", re.IGNORECASE)
+PREFIX_RE = re.compile(r"^\s*(sudo\s+(-\w+\s+)*)?(\w+=\S+\s+)*", re.IGNORECASE)
+
+def changes_infra(cmd):
+    """Ищет изменяющую команду посегментно, пропуская read-only обёртки."""
+    for seg in re.split(r"\|\||&&|;|\||\n", cmd):
+        probe = PREFIX_RE.sub("", seg).strip()
+        if not probe or READONLY_LEAD.match(probe):
+            continue
+        if CHANGE_RE.search(probe):
+            return probe
+    return None
+
 changed, updated = [], False
 for rec in turn:
     if rec.get("type") != "assistant":
@@ -119,8 +137,9 @@ for rec in turn:
         inp = block.get("input") or {}
         if name == "Bash":
             cmd = str(inp.get("command", ""))
-            if CHANGE_RE.search(cmd):
-                changed.append(cmd.strip().splitlines()[0][:90])
+            hit = changes_infra(cmd)
+            if hit:
+                changed.append(hit.splitlines()[0][:90])
             if INVENTORY_RE.search(cmd):       # обновление снимка/дашборда скриптом — тоже засчитываем
                 updated = True
         elif name in ("Write", "Edit", "NotebookEdit"):

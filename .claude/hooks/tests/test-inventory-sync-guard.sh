@@ -51,6 +51,14 @@ echo "[1] Диагностика без изменений — не трогае
 mk "$TMP/ro.jsonl" "Bash:docker ps -a" "Bash:systemctl status nginx" "Bash:df -h"
 check pass "read-only команды" "$TMP/ro.jsonl"
 
+echo "[1а] Опасные слова внутри read-only команд — не изменение (F4+, разбор 2026-07-24)"
+mk "$TMP/ro2.jsonl" "Bash:grep -n \"crontab\" .claude/hooks/red-zone-guard.sh"
+check pass "grep со словом crontab" "$TMP/ro2.jsonl"
+mk "$TMP/ro3.jsonl" "Bash:echo 'docker compose up -d' >> notes.md"
+check pass "echo с текстом команды" "$TMP/ro3.jsonl"
+mk "$TMP/ro4.jsonl" "Bash:cat /etc/systemd/system/app.service | head -20"
+check pass "чтение unit-файла" "$TMP/ro4.jsonl"
+
 echo "[2] Изменение без обновления inventory — останавливаем"
 mk "$TMP/change1.jsonl" "Bash:ssh bronto 'docker compose up -d academii'"
 check block "docker compose up" "$TMP/change1.jsonl"

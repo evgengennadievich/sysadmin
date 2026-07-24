@@ -76,6 +76,20 @@ check allow "git status"                    'git status'
 check allow "grep -rf pattern file"         'grep -rf pattern file'
 check allow "rm -rf во временном каталоге"  'rm -rf /tmp/claude-scratch/x'
 
+echo "[1а] Опасные слова ВНУТРИ read-only команд не блокируются (F4/F4+, разбор 2026-07-24)"
+check allow "grep по коду со словом rm -rf"  'grep -rn "rm -rf" scripts/'
+check allow "grep со словом truncate"        'grep -i truncate /etc/nginx/nginx.conf'
+check allow "truncate -s 0 (ротация лога)"   'truncate -s 0 /var/log/app.log'
+check allow "echo с опасной строкой"         'echo "docker volume rm pgdata"'
+check allow "cat файла со словом drop"       'cat /opt/sql/drop table.sql'
+check allow "grep в конвейере"               'docker ps | grep -v "volume rm"'
+check allow "sudo grep"                      'sudo grep -r "ufw disable" /etc'
+check allow "коммит с цитатой опасной команды" 'git commit -m "fix: замок ловил rm -rf в тексте"'
+check allow "тег с цитатой"                    'git tag -a v1 -m "чинит docker volume rm"'
+check deny  "коммит + опасная команда в цепочке" 'git commit -m "текст" && docker volume rm pgdata'
+check deny  "git push --force не маскируется"    'git push --force origin main'
+check deny  "git reset --hard не маскируется"    'git reset --hard HEAD~3'
+
 echo "[2] Красная зона без подтверждения блокируется"
 check deny "rm -rf на боевом пути"          'rm -rf /opt/academii/data'
 check deny "rm -fr (переставленные флаги)"  'rm -fr /var/lib/postgresql'
@@ -90,6 +104,10 @@ check deny "userdel"                        'userdel vefmv'
 check deny "dd на устройство"               'dd if=/dev/zero of=/dev/sda'
 check deny "правка sshd_config"             'sed -i "s/PermitRoot/#/" /etc/ssh/sshd_config'
 check deny "обёрнутое в ssh"                'ssh bronto "rm -rf /opt/infra"'
+check deny "опасное после безопасного"      'grep -c x file && docker volume rm pgdata'
+check deny "опасное в конвейере"            'cat list.txt | xargs docker volume rm'
+check deny "SQL truncate table"             'psql -c "truncate table users"'
+check deny "SQL truncate only"              'psql -c "TRUNCATE ONLY orders"'
 check deny "rm -rf /tmp + боевой путь"      'rm -rf /tmp/x /opt/prod'
 
 echo "[3] Подтверждение оператора открывает замок"
@@ -103,6 +121,28 @@ check deny "инъекция через вставки движка"  'docker vo
 
 echo "[5] Fail-closed: нечем проверить — блокируем"
 check deny "транскрипта не существует"      'rm -rf /opt/data' "$TMP/no-such-file.jsonl"
+
+echo "[6] Фраза из канона C.3 (CLAUDE.md) реально открывает замок"
+# Строка подтверждения — контракт между конституцией и хуком. Однажды она уже разошлась:
+# в regex было «б[еёЕЁ]кап», а канон пишет «бэкап» через «э» — замок не открывался никогда
+# (разбор 2026-07-24, F3). Тест берёт фразу ИЗ ИСТОЧНИКА, а не из головы.
+CANON_FILE="$(cd "$(dirname "$0")/../../.." && pwd)/CLAUDE.md"
+CANON="$(grep -m1 '^подтверждаю .*беру риск на себя' "$CANON_FILE" 2>/dev/null)"
+if [ -z "$CANON" ]; then
+  FAIL=$((FAIL+1)); echo "  ❌ не нашёл фразу C.3 в CLAUDE.md — контракт негде взять"
+else
+  echo "  ℹ️  канон: ${CANON}"
+  # Подставляем канонную фразу как реплику оператора, заменив плейсхолдер на имя сущности.
+  REAL="$(printf '%s' "$CANON" | sed 's/<[^>]*>/удаление тома pgdata-old/')"
+  CANON_TR="$TMP/canon.jsonl"
+  python3 - "$CANON_TR" "$REAL" <<'PY'
+import json, sys
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    f.write(json.dumps({"type":"user","message":{"role":"user","content":"снеси том"}}, ensure_ascii=False)+"\n")
+    f.write(json.dumps({"type":"user","message":{"role":"user","content":sys.argv[2]}}, ensure_ascii=False)+"\n")
+PY
+  check allow "канонная фраза открывает замок" 'docker volume rm pgdata-old' "$CANON_TR"
+fi
 
 echo "─────────────────────────────────────────────────────────"
 printf 'Итог: %d прошло, %d провалено\n' "$PASS" "$FAIL"

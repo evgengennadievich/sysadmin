@@ -29,7 +29,10 @@ HEADER='| Дата | Severity | Фронт | Основание | Находка
 echo "── Тесты гейта находок /retro ───────────────────────────"
 echo "[1] Посторонние файлы гейт не трогает"
 check allow "правка README"            "/repo/README.md"        "$NO_BASIS"
-check allow "правка другого бэклога"   "/repo/docs/BACKLOG.md"  "$NO_BASIS"
+check allow "заметки, не бэклог"       "/repo/docs/NOTES.md"    "$NO_BASIS"
+# Ожидание изменено осознанно (F5, 2026-07-24): раньше гейт стоял только на
+# `retro/BACKLOG.md`, теперь — на любом бэклоге находок, потому что саморазбор
+# переехал в `_retro/`. Кейс `/repo/docs/BACKLOG.md` переехал в секцию [5].
 
 echo "[2] Корректные находки проходят"
 check allow "основание «факт»"         "$B" "$OK_FACT"
@@ -47,6 +50,12 @@ $NO_BASIS" content
 
 echo "[4] Относительный путь тоже под гейтом"
 check deny  "retro/BACKLOG.md без префикса" "retro/BACKLOG.md" "$NO_BASIS"
+
+echo "[5] Гейт следует за находками, а не за каталогом (F5, разбор 2026-07-24)"
+check deny  "_retro/BACKLOG.md (глобальный /lore-retro)" "/repo/_retro/BACKLOG.md" "$NO_BASIS"
+check deny  "любой иной бэклог находок"                  "/repo/docs/notes/BACKLOG.md" "$NO_BASIS"
+check allow "сырой отчёт аудитора не гейтим"             "/repo/_retro/REVIEW-2026-07-24-1c176a94.md" "$NO_BASIS"
+check allow "дайджест стенограммы не гейтим"             "/repo/_retro/_digest.md" "$NO_BASIS"
 
 echo "─────────────────────────────────────────────────────────"
 printf 'Итог: %d прошло, %d провалено\n' "$PASS" "$FAIL"

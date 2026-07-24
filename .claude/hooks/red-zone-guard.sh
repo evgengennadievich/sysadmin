@@ -37,7 +37,9 @@ CONFIRM_WINDOW=10
 RED_PATTERNS=(
   'rm[[:space:]]+(-[a-zA-Z]*[rR][a-zA-Z]*[fF]|-[a-zA-Z]*[fF][a-zA-Z]*[rR])'
   'drop[[:space:]]+(database|table|schema)'
-  'truncate[[:space:]]+(table|only)?'
+  # Группа обязательна: без неё ловилась ЛЮБАЯ команда со словом truncate —
+  # `truncate -s 0 /var/log/app.log` (штатная ротация) и даже `grep truncate`.
+  'truncate[[:space:]]+(table|only)'
   'docker[[:space:]]+volume[[:space:]]+(rm|prune)'
   'docker[[:space:]]+system[[:space:]]+prune'
   'git[[:space:]]+push[[:space:]].*(--force|-f[[:space:]]|-f$)'
@@ -110,11 +112,37 @@ if [ -z "${CMD:-}" ]; then
 fi
 
 # ── Красная зона? ─────────────────────────────────────────────────────────────
+# Команда разбирается ПО СЕГМЕНТАМ (`;` `&&` `||` `|` перевод строки), и сегменты,
+# начинающиеся с read-only утилиты, пропускаются целиком: их аргументы — данные, а не
+# команды. Без этого `grep -rn "rm -rf" scripts/` и `grep truncate nginx.conf` блокировались
+# как красная зона — три холостых срабатывания за день (разбор сессии 2026-07-24, F4/F4+).
+#
+# ВАЖНО: пропускаем ТОЛЬКО read-only лидеров. Сегмент `ssh host "rm -rf /opt"` начинается с
+# ssh — не read-only, поэтому опасное содержимое кавычек по-прежнему ловится (это главный
+# способ, которым агент трогает сервер).
+READONLY_LEAD='^(grep|egrep|fgrep|rg|ag|echo|printf|cat|bat|less|more|head|tail|wc|jq|yq|sort|uniq|column|diff|comm|man|which|type|file|stat|basename|dirname)([[:space:]]|$)'
+# Git-подкоманды, чьи аргументы — текст, а не операция: сообщение коммита или тега
+# запросто содержит «rm -rf» как цитату (поймало на четвёртом холостом срабатывании
+# в самой сессии разбора). Опасные подкоманды сюда НЕ входят: `git push --force`,
+# `git reset --hard` остаются в RED_PATTERNS. Цепочка проверяется посегментно, поэтому
+# `git commit -m "…" && rm -rf /opt` всё равно блокируется вторым сегментом.
+SAFE_GIT_LEAD='^git[[:space:]]+(commit|add|status|log|show|diff|tag|fetch|remote|branch|stash[[:space:]]+list|config)([[:space:]]|$)'
+
 LOWER="$(printf '%s' "$CMD" | tr '[:upper:]' '[:lower:]')"
 HIT=""
-for re in "${RED_PATTERNS[@]}"; do
-  if printf '%s' "$LOWER" | grep -Eq "$re"; then HIT="$re"; break; fi
-done
+while IFS= read -r seg; do
+    # Срезаем префиксы, не меняющие сути сегмента: пробелы, sudo, env-присваивания.
+    probe="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^sudo[[:space:]]+(-[a-zA-Z]+[[:space:]]+)*//; s/^([a-z_][a-z0-9_]*=[^[:space:]]*[[:space:]]+)+//')"
+    [ -z "$probe" ] && continue
+    printf '%s' "$probe" | grep -Eq "$READONLY_LEAD" && continue   # чтение — не красная зона
+    printf '%s' "$probe" | grep -Eq "$SAFE_GIT_LEAD" && continue   # git-текст, не операция
+    for re in "${RED_PATTERNS[@]}"; do
+        if printf '%s' "$probe" | grep -Eq "$re"; then HIT="$re"; break 2; fi
+    done
+done <<EOF
+$(printf '%s' "$LOWER" | sed -E 's/(\|\||&&|;|\||\n)/\n/g')
+EOF
+
 [ -z "$HIT" ] && exit 0
 
 # rm -rf строго во временных каталогах — не красная зона.
