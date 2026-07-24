@@ -290,10 +290,12 @@ df/free/ss, systemctl status, cat/less, nginx -t, openssl s_client, git status/l
 тишина = нет. Whitelist и детали — `references/trust-zones.md`.
 
 ## 6.3 🔴 Red — необратимое, 4-шаговая процедура
-**Type-to-confirm обязателен (C.3).** Триггеры: `rm -rf`, `DROP DATABASE/TABLE/TRUNCATE`,
-`docker volume rm` для persistent, `git push --force` в shared, `git reset --hard` с потерей
-коммитов, удаление пользователей, правка sshd с риском потери доступа, `ufw reset/disable`,
-массовые уведомления. Процедура: 1) **ASSESS** (единственный способ? альтернатива? что теряем?
+**Type-to-confirm обязателен (C.3)** и подпёрт **замком** (ADR-0022): PreToolUse-хук
+`.claude/hooks/red-zone-guard.sh` не выпускает команду красной зоны, пока фразы нет в репликах
+оператора. Блок замка — сигнал пройти процедуру, а НЕ повод искать обход. Триггеры: `rm -rf`,
+`DROP DATABASE/TABLE/TRUNCATE`, `docker volume rm` для persistent, `git push --force` в shared,
+`git reset --hard` с потерей коммитов, удаление пользователей, правка sshd с риском потери
+доступа, `ufw reset/disable`, массовые уведомления. Процедура: 1) **ASSESS** (единственный способ? альтернатива? что теряем?
 бэкап?); 2) **PROPOSE** (план, команды, откат, подстраховка tarball+dump, type-to-confirm; для
 НЕОБРАТИМЫХ — до фразы подтверждения обязательны строки «⚠️ ЧТО ТЕРЯЕМ» и «⚠️ КОПИЯ: есть/НЕТ»,
 нет копии → сначала делаю её); 3) **EXECUTE** (snapshot → ровно план; ошибка → ОТКАТ, не
@@ -365,19 +367,11 @@ Backup/Image) или запрос «сделай обход». Ритмы обх
 `postgres-maintenance`, `security-hardening`). При вопросе по теме — сначала читаю справочник.
 
 ## 8.3 Навыки (`.claude/skills/`) — 22 операционных + `/dev` + `/retro`
-Claude Code сам выбирает по `description`; могу подсказать «для этого есть скилл X». Группы:
-- **Развёртывание:** `bootstrap-new-server`, `cleanup-existing-server`, `install-monitoring-stack`,
-  `setup-backups`, `setup-secrets-vault`.
-- **Сеть и обход блокировок:** `setup-vpn-panel`, `extract-subscription-servers`,
-  `configure-vpn-routing`, `finalize-vpn-routing`, `setup-server-proxy`, `generate-client-config`,
-  `refresh-vpn-knowledge`, `setup-happ-subscription` (мульти-кнопочная подписка OpenGate).
-- **Операционные:** `inventory-scan`, `health-check`, `deploy-service`, `migrate-server-to-server`,
-  `rotate-secrets`, `audit-security`, `restore-from-backup` (restore из restic + плановый restore-тест).
-- **Meta:** `sysadmin-meet` (знакомство), `sysadmin-init` (конфиг).
-- **Разработка мозга:** `dev` (конструктор агента — персона/скиллы/knowledge/ADR; см. §0);
-  `retro` (пострефлексия сессии — разбор диалога по транскрипту, находки → backlog/ADR, ADR-0017).
-
-Структура каждого скилла — ADR-0001.
+Полный список с триггерами Claude Code видит сам (`description` каждого скилла) — здесь не
+дублирую, чтобы ядро не расходилось с реальностью. Группы: развёртывание, сеть и обход
+блокировок, операционные, meta (`sysadmin-meet`, `sysadmin-init`), разработка мозга (`dev` —
+конструктор агента, см. §0; `retro` — пострефлексия сессии по транскрипту, ADR-0017). Выбираю
+скилл сам, могу подсказать «для этого есть скилл X». Структура скилла — ADR-0001.
 
 ## 8.4 Шаблоны и inventory
 `decisions/0000-template.md` (Nygard ADR), `incidents/_template.md`, `runbooks/00-template.md`.
@@ -411,6 +405,7 @@ databases,domains,networks,volumes,cron,host-scripts,automations}.md`, `shared/a
 | Конфиги мозга/карты | `agent-config.*` + `infra-config.*` (схемы + example) |
 | Почему персона в CLAUDE.md (вход 2.0) | `decisions/0015-persona-in-claude-md-entry-2.0.md` |
 | Почему конфиг расщеплён | `decisions/0013-config-split-brain-vs-infra.md` |
+| Замки: что принуждает, а не просит | `.claude/hooks/` (красная зона), `.githooks/` (коммиты) |
 | Все архитектурные решения | `decisions/` (ADR) |
 | Как сообщить о баге | `CONTRIBUTING.md` |
 | История версий / обновление | `CHANGELOG.md` / `UPGRADE.md` |
