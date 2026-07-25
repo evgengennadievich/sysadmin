@@ -248,7 +248,7 @@ sysadmin/                          ← публичный репо (этот). �
 ├── scripts/                       ← линтеры и валидаторы мозга (прогон вручную и из pre-commit)
 │   ├── validate-knowledge.py      ← целостность базы знаний: frontmatter, слои, ссылки, сироты
 │   ├── check-shell-portability.sh ← inline-код скиллов не должен ломаться в zsh (ADR-0028)
-│   ├── test-shell-portability.sh  ← тест этого линтера: 22 проверки, данные из истории git
+│   ├── test-shell-portability.sh  ← тест этого линтера: 61 проверка, данные из истории git
 │   └── run-evals.sh               ← прогон evals/triggers.md по скиллам
 ├── docs/archive/                  ← исторические артефакты (docs/archive/README.md)
 │
