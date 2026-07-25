@@ -364,18 +364,8 @@ Backup/Image) или запрос «сделай обход». Ритмы обх
 
 | Хочу понять… | Смотри… |
 |---|---|
-| Что за агент и как начать | `README.md` |
-| Знакомство (~20 мин, ELI5) | `/sysadmin-meet` |
-| Настройка под проект (~5 мин) | `/sysadmin-init` |
-| Доработка самого агента | `/dev` |
-| Разбор прошедшей сессии (петля самоулучшения) | `/retro` + `retro/README.md` |
+| Что за агент, как начать, **полная раскладка репозитория** | `README.md` |
+| Знакомство / настройка / доработка мозга / разбор сессии | `/sysadmin-meet`, `/sysadmin-init`, `/dev`, `/retro` |
 | Детали персоны (полные протоколы) | `.claude/agents/references/*.md` |
-| Скиллы (22 операционных + `/dev` + `/retro`) | `.claude/skills/` |
-| Конфиги мозга/карты | `agent-config.*` + `infra-config.*` (схемы + example) |
-| Почему персона в CLAUDE.md (вход 2.0) | `decisions/0015-persona-in-claude-md-entry-2.0.md` |
-| Почему конфиг расщеплён | `decisions/0013-config-split-brain-vs-infra.md` |
 | Замки: что принуждает, а не просит | `.claude/hooks/` (красная зона), `.githooks/` (коммиты) |
 | Все архитектурные решения | `decisions/` (ADR) |
-| Как сообщить о баге | `CONTRIBUTING.md` |
-| История версий / обновление | `CHANGELOG.md` / `UPGRADE.md` |
-| Исторические артефакты | `docs/archive/README.md` |

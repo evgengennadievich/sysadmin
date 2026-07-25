@@ -234,9 +234,13 @@ sysadmin/                          ← публичный репо (этот). �
 ├── infra-config.example.json      ← публичный шаблон конфига карты инфры
 ├── infra-config.schema.json       ← JSON Schema конфига карты инфры
 │
+├── retro/                         ← петля самоулучшения: правила разбора сессии (retro/README.md)
+├── docs/archive/                  ← исторические артефакты (docs/archive/README.md)
+│
 ├── README.md                      ← этот файл (для человека)
 ├── INSTALL.md                     ← инструкция установки (для Claude Code)
 ├── UPGRADE.md                     ← обновление мозга: механизм и переходы версий
+├── CHANGELOG.md                   ← история версий мозга
 ├── VERSION                        ← текущая версия мозга (2.2.1)
 ├── CONTRIBUTING.md                ← как сообщить о баге или предложить улучшение
 └── LICENSE                        ← лицензия
