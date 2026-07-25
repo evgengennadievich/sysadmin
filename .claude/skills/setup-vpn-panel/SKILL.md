@@ -240,48 +240,20 @@ NEVER пропускать эту развязку. NEVER отвечать на 
 
 ## Шаг 4: Выпуск TLS-сертификата
 
-Скрипт `scripts/03-configure-tls.sh` — выбор пути по `TLS_METHOD`. Полное
-обоснование выбора метода — `references/tls-method-choice.md`.
+Скрипт `scripts/03-configure-tls.sh` — выбор пути по `TLS_METHOD`. Полное описание
+каждого метода (шаги, где оказывается сертификат, как идёт renew, сравнительная таблица) —
+`references/tls-method-choice.md`. Здесь только то, что влияет на порядок шагов:
 
-- **acme-webroot** (default) — через `/root/.acme.sh/acme.sh` с `-w
-  $WEBROOT_PATH` (HTTP-01 через работающий nginx). Шаги:
-  1. Создаёт `$WEBROOT_PATH` (`/var/www/letsencrypt/` по умолчанию).
-  2. Добавляет в дефолтный server-блок nginx `location ^~
-     /.well-known/acme-challenge/ { root /var/www/letsencrypt; }` и
-     перезагружает nginx (`nginx -t && systemctl reload nginx`).
-  3. `acme.sh --issue -d $DOMAIN -w $WEBROOT_PATH --reloadcmd
-     "systemctl restart x-ui"` — выпуск без остановки nginx.
-  4. acme.sh кладёт cert в `/root/cert/$DOMAIN/` (унифицированный путь).
-  5. Renew автоматический через `acme.sh.cron`, тоже без касания nginx.
-  Метод не трогает порт 80 в UFW — он **остаётся открыт** (нужен для
-  ACME-челленджа и редиректа `http://` → `https://`).
+| `TLS_METHOD` | Порт 80 | Моргает ли nginx | Когда брать |
+|---|---|---|---|
+| `acme-webroot` (**default**) | остаётся открыт | нет | на сервере есть работающий nginx |
+| `certbot-webroot` | остаётся открыт | нет | то же, но оператор уже на certbot |
+| `acme-standalone` (fallback) | занимается на время выпуска | **да, при каждом renew** | VPS, где nginx нет и не будет |
+| `certbot-standalone` | то же | **да** | то же, оператор на certbot |
+| `acme-cloudflare` | не трогается | нет | домен уже на Cloudflare И аудитория не в РФ (рефлекс §3.8.9) |
 
-- **certbot-webroot** — то же, но через certbot вместо acme.sh. Шаги:
-  1. Устанавливает certbot (`apt install certbot`).
-  2. Создаёт `$WEBROOT_PATH` и добавляет тот же `location`-блок в nginx.
-  3. `certbot certonly --webroot -w $WEBROOT_PATH -d $DOMAIN
-     --non-interactive --agree-tos -m $ADMIN_EMAIL --deploy-hook
-     "systemctl restart x-ui"`.
-  4. Симлинк `/root/cert/$DOMAIN/fullchain.pem` →
-     `/etc/letsencrypt/live/$DOMAIN/fullchain.pem` (и аналогично для
-     `privkey.pem`) — для унификации пути с другими методами.
-  5. Renew через `certbot.timer`, без касания nginx.
-  Метод так же не трогает порт 80 в UFW.
-
-- **acme-standalone** (fallback) — через `acme.sh --standalone`. Открывает
-  80, останавливает nginx/apache (если есть), выпускает cert,
-  восстанавливает сервисы, кладёт cert в `/root/cert/$DOMAIN/`. **Моргает
-  nginx целиком при выпуске и каждом renew.** Брать только для VPS,
-  где nginx нет и не будет.
-
-- **certbot-standalone** — то же на certbot. `certbot certonly --standalone
-  -d $DOMAIN`, копирует cert в `/root/cert/$DOMAIN/`. Те же ограничения.
-
-- **acme-cloudflare** — DNS-01 через CF_Email + CF_Key (Global API Key).
-  Не трогает порт 80. **Для РФ-операторов и доменов с российской аудиторией
-  не рекомендуется** (Cloudflare блокируется в РФ). Брать только в узких
-  случаях, когда домен уже на Cloudflare и аудитория нерусская — см. рефлекс
-  персоны 3.8.9.
+Все методы кладут сертификат в унифицированный путь `/root/cert/$DOMAIN/` — дальше шаги
+одинаковые независимо от выбора.
 
 После выпуска — привязка к панели через **прямую правку SQLite** (нет CLI
 для `webCertFile`):
@@ -348,83 +320,33 @@ macOS, аналогично для других).
 
 ## Шаг 7: Обновление inventory и конфига
 
-Inventory:
+В `inventory/hosts/$SERVER_ALIAS/services.md` — раздел «VPN-панель 3X-UI»: URL, версия,
+где лежат креды, расположение сервера, метод и путь TLS, дата установки и явная строка
+«inbound/outbound не настроены». В `infra-config.json` — блок `vpn` с `enabled`,
+`panel_url`, `panel_web_base_path`, `server_role`, `server_proxy_enabled=false`,
+`upstream_kind="none"`, `default_reality_dest`.
 
-```markdown
-# inventory/hosts/$SERVER_ALIAS/services.md (раздел добавляется)
+Готовые образцы обоих блоков — `references/output-templates.md`.
 
-## VPN-панель 3X-UI
-
-- **URL**: https://$DOMAIN:$PANEL_PORT/$WEB_BASE_PATH/
-- **Версия**: $VERSION
-- **Логин**: см. менеджер паролей, запись `3xui-panel-$SERVER_ALIAS`
-- **Расположение**: $LOCATION (ru-server / foreign-server)
-- **TLS**: Let's Encrypt через $TLS_METHOD, путь `/root/cert/$DOMAIN/`
-- **Установлено**: YYYY-MM-DD
-- **Inbound/outbound**: не настроены (см. `/configure-vpn-routing`)
-```
-
-`infra-config.json` обновляется:
-
-```jsonc
-"vpn": {
-  "enabled": true,
-  "panel_url": "https://${DOMAIN}:${PANEL_PORT}",
-  "panel_web_base_path": "/${WEB_BASE_PATH}/",
-  "server_role": "${LOCATION}",          // ru-server | foreign-server
-  "server_proxy_enabled": false,
-  "upstream_kind": "none",
-  "default_reality_dest": "${REALITY_DEST}"
-}
-```
-
-> 🔒 **`server_role` — источник правды для выбора протокола.** Записывается
-> здесь по выбранному `$LOCATION` (Шаг 1). `/configure-vpn-routing` читает это
-> поле и автоматически выводит протокол inbound: `ru-server → vless-tcp` (без
-> Reality), `foreign-server → vless-reality`. На нём же стоит guard в
-> `create-vless-inbound.sh` — Reality на `ru-server` блокируется на уровне кода.
+> 🔒 **`server_role` — источник правды для выбора протокола.** Записывается здесь по
+> выбранному `$LOCATION` (Шаг 1). `/configure-vpn-routing` читает это поле и выводит
+> протокол inbound: `ru-server → vless-tcp` (без Reality), `foreign-server → vless-reality`.
+> На нём же стоит guard в `create-vless-inbound.sh` — Reality на `ru-server` блокируется
+> на уровне кода.
 
 ## Шаг 8: Финальный отчёт
 
-```
-✓ 3X-UI v$VERSION установлен на $SSH_TARGET
-✓ Админка панели: https://$DOMAIN:$PANEL_PORT/$WEB_BASE_PATH/
-✓ Логин/пароль: в $MANAGER (запись `3xui-panel-$SERVER_ALIAS`)
-✓ HTTPS: валидный сертификат от Let's Encrypt (метод: $TLS_METHOD)
-✓ UFW: open $PANEL_PORT (+ 443 для foreign-server), порт 80 — $PORT_80_STATUS
-✓ Inventory обновлён: $INFRA/inventory/hosts/$SERVER_ALIAS/services.md
-✓ Config обновлён: vpn.enabled=true, vpn.panel_url, vpn.panel_web_base_path
+Отчёт перечисляет: версию и адрес панели, где лежат креды, статус HTTPS и метод выпуска,
+что открыто в UFW (включая статус порта 80), какие файлы inventory и конфига обновлены.
+Дальше — smoke check («открой URL, должна быть страница логина»), и обязательно
+**повтор развязки** из Шага 1а: поставлена только админка, VPN-двери для клиентов — это
+следующая, отдельная операция. Готовый текст отчёта — `references/output-templates.md`.
 
-🔍 Smoke check: открой URL в браузере, должна быть страница логина
-   (если 404 — проверь webBasePath; если timeout — проверь UFW).
-
-ℹ️  Что мы поставили: только АДМИНКУ (веб-морду для тебя). Это НЕ VPN-сервер
-   целиком. VPN-двери для клиентов (инбаунды) — это следующий шаг через
-   `/configure-vpn-routing`. Там же решим, какие двери прячем за nginx
-   (XHTTP), а какие выставляем напрямую (Reality на отдельный порт) — это
-   ДРУГИЕ вопросы, не путать с тем, куда поставили админку.
-
-✅ На этом установка панели ЗАВЕРШЕНА. Панель пустая: ни клиентов, ни
-   outbound, ни маршрутизации — это нормально, это была отдельная операция.
-
-➡️  Следующий шаг — ОТДЕЛЬНАЯ операция, запускается ПО ТВОЕМУ ЗАПРОСУ, не
-    автоматически: `/configure-vpn-routing` (inbound для клиентов, outbound
-    через подписку/свой загр.VPS, маршрутизация, добавление клиентов). Скажи
-    когда будешь готов — и мы её начнём. Сам вперёд не забегаю.
-```
-
-> `$PORT_80_STATUS` принимает значения:
-> - `open (для ACME renew + редирект http→https)` — при `*-webroot` методах
->   или если на сервере есть сайты на nginx.
-> - `closed` — только при `*-standalone` методах И отсутствии сайтов.
-
-> ⚠️ **Граница этапа (рефлекс персоны 3.8.4).** После этого отчёта агент
-> **останавливается** и ждёт. Не предлагает «давай сразу настроим первый
-> профиль», не создаёт inbound/outbound по своей инициативе. Установка
-> панели и настройка маршрутизации — две разные операции; смешивать их в
-> одном проходе нельзя — это путает оператора (он перестаёт понимать, какой
-> шаг завершён). Переход к `/configure-vpn-routing` — только по явному
-> запросу оператора.
+> ⚠️ **Граница этапа (рефлекс персоны 3.8.4).** После отчёта агент **останавливается**
+> и ждёт. Не предлагает «давай сразу настроим первый профиль», не создаёт inbound или
+> outbound по своей инициативе. Установка панели и настройка маршрутизации — две разные
+> операции; смешивание их в одном проходе лишает оператора понимания, какой шаг завершён.
+> Переход к `/configure-vpn-routing` — только по явному запросу оператора.
 
 # Откат
 
@@ -444,47 +366,17 @@ ssh $SSH_TARGET "rm -rf /root/cert/$DOMAIN; /root/.acme.sh/acme.sh --revoke -d $
 # (manual — оператор удаляет через CLI/UI своего менеджера)
 ```
 
-# Failed attempts (граблекейс)
+# Bundled resources
 
-- **«admin/admin» как креды по умолчанию (Docker-вариант)** — первое, что брутят.
-  Скилл всегда меняет на сгенерированные. NEVER оставлять `admin`.
-- **Сертификат на IP вместо домена** — 6-дневный shortlived от Let's Encrypt,
-  требует renew каждые 4 дня. Скилл не поддерживает — слишком хрупко для
-  типового домашнего сценария.
-- **Установка без `n` ответа на интерактив установщика** — установщик зависает
-  и таймаутит. Решение: `echo "n" | bash install.sh` (см. `02-install-3x-ui.sh`).
-- **TLS-выпуск через standalone когда занят 80** — acme падает, скилл откатывается.
-  Pre-check ловит это в Шаге 0.
-- **CLI `x-ui setting -webCertFile`** — такого флага НЕТ. Только через прямой
-  SQLite UPDATE. Документировано в `tls-method-choice.md` и `03-configure-tls.sh`.
-- **Форк 3X-UI** — установщик ставит эталонную mhsanaei всегда (это
-  github.com/mhsanaei/3x-ui/install.sh), форки оператор ставит вручную мимо
-  этого скилла. Если оператор уже поставил форк до запуска — pre-check
-  обнаружит `/usr/local/x-ui` и STOP с предложением `/usr/local/x-ui/x-ui uninstall`.
+| Файл | Что это и когда открывать |
+|---|---|
+| `references/tls-method-choice.md` | **Как выпускать сертификат**: пять методов по шагам, где оказывается сертификат, как идёт renew, сравнительная таблица, что НЕ работает в текущей версии 3X-UI. Открывать на Шаге 4 |
+| `references/panel-hardening.md` | **Чек-лист безопасности панели** — после установки |
+| `references/output-templates.md` | **Образцы записей и отчёта**: блок для `services.md`, блок `vpn` для `infra-config.json`, полный текст финального отчёта. Открывать на Шагах 7 и 8 |
+| `references/pitfalls.md` | **Когда шаг не сработал**: шесть граблей (креды по умолчанию, сертификат на IP, зависший интерактив установщика, занятый порт 80, несуществующий флаг `-webCertFile`, форк вместо эталона) и пять граничных случаев (VPS без первичной настройки, NAT, несколько доменов на IP, включённый Cloudflare-proxy, исчерпанный rate limit) |
+| `scripts/01-preflight.sh` … `06-validate-reality-dest.sh` | шаги процедуры по порядку: pre-check, установка, TLS, UFW, запись секретов, валидация Reality-dest |
 
-# Граничные случаи
-
-- **Свежий VPS без `/bootstrap-new-server`** → большинство шагов работают,
-  но без UFW (нужен) и без fail2ban (отдельная защита). Скилл предупреждает
-  и предлагает сначала `/bootstrap-new-server`.
-- **Сервер за NAT** → DNS на внешний IP, не на внутренний. Pre-check сравнит
-  внешний IP сервера (через `curl ifconfig.me`) с DNS A-записью.
-- **Несколько доменов на один IP** → не проблема, 3X-UI слушает только указанный
-  `$DOMAIN`. Параллельный nginx с другими сайтами — допустим, см. acme-cloudflare
-  чтобы не трогать порт 80.
-- **Cloudflare proxy ENABLED на A-записи** → cert через standalone не выпустится
-  (Cloudflare маскирует IP). Решение: отключить «proxy» (серое облако) на время
-  выпуска, или сразу `TLS_METHOD=acme-cloudflare`.
-- **Истёкший Let's Encrypt rate limit на домен** → 5 повторов в неделю для
-  identicалa. Скилл показывает ошибку с предложением подождать или сменить
-  identicалу.
-
-# Связанные документы
-
-- `references/tls-method-choice.md` — обоснование 3 методов TLS.
-- `references/panel-hardening.md` — чек-лист безопасности панели.
-- `../../knowledge/networking/_reference/3x-ui-panel.md` — архитектура 3X-UI и подводные камни.
-- `../../knowledge/networking/_reference/3x-ui-api.md` — REST API (для последующих скиллов).
-- `../../knowledge/networking/_reference/vpn-protocols.md` — выбор протоколов inbound/outbound.
-- `decisions/0005-vpn-architecture.md` — архитектурное решение.
-- `evals/triggers.md` — фразы оператора для распознавания скилла.
+Внешние источники: `knowledge/networking/_reference/3x-ui-panel.md` (архитектура панели и
+подводные камни), `3x-ui-api.md` (REST API — понадобится следующим скиллам),
+`vpn-protocols.md` (выбор протоколов inbound/outbound),
+`decisions/0005-vpn-architecture.md` (архитектурное решение).
