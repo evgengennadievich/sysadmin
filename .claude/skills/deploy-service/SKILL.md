@@ -8,6 +8,7 @@ description: |
   Триггеры: «задеплой», «новый сервис», «обнови сервис», «deploy», «выкатить», «накатить версию», «откати».
   НЕ для деплоя в обход git (аварийный runbook); НЕ для drop volume/database (Red Zone).
 allowed-tools: Bash, Read, Edit, Write
+disable-model-invocation: true   # меняет боевую систему — только по явной команде оператора (ADR-0027)
 ---
 
 <role>

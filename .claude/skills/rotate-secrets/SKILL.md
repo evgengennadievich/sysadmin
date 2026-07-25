@@ -8,6 +8,7 @@ description: |
   «secret expired», «compromise — ротировать», «сменить токен», «обновить ключ».
   НЕ для первичной настройки секретов (setup-secrets-vault); НЕ для удаления секрета без замены.
 allowed-tools: Bash, Read, Edit, Write
+disable-model-invocation: true   # меняет боевую систему — только по явной команде оператора (ADR-0027)
 ---
 
 <role>

@@ -13,6 +13,7 @@ description: |
   НЕ для настройки бэкапов с нуля — это `/setup-backups`. НЕ для смены секретов —
   `/rotate-secrets`. НЕ для миграции сервер→сервер — `/migrate-server-to-server`.
 allowed-tools: Bash, Read, Write, Edit
+disable-model-invocation: true   # меняет боевую систему — только по явной команде оператора (ADR-0027)
 ---
 
 <role>

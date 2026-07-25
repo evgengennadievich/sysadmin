@@ -9,6 +9,7 @@ description: |
   «cleanup server», «приведи в порядок без простоя».
   НЕ для свежих VPS (для них — bootstrap-new-server); НЕ для удаления volumes/БД (это Red Zone).
 allowed-tools: Bash, Read, Edit, Write
+disable-model-invocation: true   # меняет боевую систему — только по явной команде оператора (ADR-0027)
 ---
 
 <role>

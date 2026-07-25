@@ -9,6 +9,7 @@ description: |
   НЕ для приведения хаоса в порядок (для этого — cleanup-existing-server); НЕ для серверов
   с существующими Docker/nginx/configs — это другой жанр.
 allowed-tools: Bash, Read, Edit, Write
+disable-model-invocation: true   # меняет боевую систему — только по явной команде оператора (ADR-0027)
 ---
 
 <role>
