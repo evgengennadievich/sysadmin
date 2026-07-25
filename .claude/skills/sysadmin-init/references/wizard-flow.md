@@ -316,7 +316,7 @@ regex-проверки, что по умолчанию. Разделы выше 
 **Раунд 2 (менеджер паролей).** Enum `keychain`/`bitwarden`/`1password`/`pass`/`keepassxc`/
 `other`; дефолт по OS (macOS→`keychain`, Linux→`pass`). Для известных — `cli_available:true`.
 Ветка **«Другой менеджер»** (research CLI + честный выбор «остаться руками / перейти на
-Bitwarden») — полностью в `wizard-flow.md` §«Другой менеджер»; пишу `manager_name` +
+Bitwarden») — полностью в разделе «Раунд 2» этого же документа, подраздел «Другой менеджер»; пишу `manager_name` +
 `cli_available` по результату ресёрча. Подсказка: реальные значения — не сюда, а в
 `/setup-secrets-vault`.
 

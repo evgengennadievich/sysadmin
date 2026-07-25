@@ -50,7 +50,7 @@ pre-migration checklist обязателен, rollback готов в любой 
 
 Большинство шагов миграции — Yellow Zone (брифинг + «ок»). Но две категории операций —
 **Red Zone** (4-шаговая процедура ASSESS → PROPOSE → EXECUTE → VERIFY с type-to-confirm,
-канон — в персоне и `references/trust-zones.md`):
+канон — в персоне и `.claude/agents/references/trust-zones.md`):
 
 1. **`rsync --delete` на целевой сервер** — стирает на приёмнике всё, чего нет на
    источнике. Перепутанные местами хосты = необратимое уничтожение боевого сервера

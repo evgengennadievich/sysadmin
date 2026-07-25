@@ -128,5 +128,5 @@ Happ (пример — в knowledge §9 и в выводе generate.py). `nginx 
   type-to-confirm (дословная строка) здесь **не нужен** — это инструмент Red. Правка
   боевого генератора весомее обычного Yellow, но канон Yellow её закрывает: брифинг +
   diff до применения + бэкап + откат, подтверждение простое («ок»/«давай»). Тянуть
-  дословную строку в Yellow = размывать сигнал Red (см. `references/trust-zones.md`,
+  дословную строку в Yellow = размывать сигнал Red (см. `.claude/agents/references/trust-zones.md`,
   Decision Point).
