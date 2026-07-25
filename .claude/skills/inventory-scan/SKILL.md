@@ -80,20 +80,38 @@ mkdir -p "$INVENTORY_DIR/hosts/"
 # старше 30 мин (предыдущий скан упал) снимаем как stale.
 LOCK="$INVENTORY_DIR/.scan.lock"
 [ -d "$LOCK" ] && find "$LOCK" -maxdepth 0 -mmin +30 2>/dev/null | grep -q . && {
-  echo "→ лок старше 30 мин — снимаю как зависший (stale)."; rm -rf "$LOCK"; }
+  echo "→ лок старше 30 мин — снимаю как зависший (stale)."
+  release_lock; }
 if mkdir "$LOCK" 2>/dev/null; then
   date -u +%Y-%m-%dT%H:%M:%SZ > "$LOCK/started_at" 2>/dev/null
   echo "→ лок inventory-scan взят: $LOCK"
 else
   echo "СТОП: уже идёт inventory-scan (лок $LOCK, начат $(cat "$LOCK/started_at" 2>/dev/null || echo '?'))."
-  echo "      Дождись его завершения. Если уверен, что скан не идёт — сними лок: rm -rf \"$LOCK\"."
+  echo "      Дождись его завершения. Если уверен, что скан не идёт — сними лок вручную:"
+  echo "      rm -f \"$LOCK/started_at\" && rmdir \"$LOCK\""
   exit 1
 fi
 ```
 
+Снятие лока — отдельной функцией, объявленной до её первого вызова:
+
+```bash
+release_lock() {          # снять лок: точечно, БЕЗ рекурсивного удаления
+  rm -f "$LOCK/started_at" 2>/dev/null
+  rmdir "$LOCK" 2>/dev/null   # rmdir откажется удалять непустой каталог
+}
+```
+
+> ⚠️ **Почему не рекурсивное удаление каталога.** Две причины, обе выяснены живым
+> прогоном 2026-07-25. Первая: `rmdir` физически не может снести дерево — при опечатке
+> в `$LOCK` он просто откажется, а рекурсивное удаление снесло бы всё молча. Вторая:
+> замок красной зоны (ADR-0022) блокирует рекурсивное удаление по **переменной** — он
+> не знает, что внутри неё, и обязан считать боевым путём. То есть прежняя формулировка
+> делала Шаги 1 и 7 этого зелёного скилла невыполнимыми. Не «упрощать» обратно.
+
 SSH не настроен — стоп, без выдумывания «возможно, ключ ниже». Прошу оператора проверить
-ключ и повторить. **Лок держится до Шага 7** (снимается в конце или при любой отмене —
-`rm -rf "$LOCK"`, иначе следующий скан заблокирован).
+ключ и повторить. **Лок держится до Шага 7** (снимается вызовом `release_lock` в конце
+или при любой отмене, иначе следующий скан заблокирован).
 
 ## Шаг 2. Запуск dump-snapshot.sh
 
@@ -120,12 +138,15 @@ SNAPSHOT_DIR="$INVENTORY_DIR/hosts/$HOST_DIR/snapshots/$SNAPSHOT_DATE"
 ok=1
 HOST_KIND=$(grep '^host_kind:' "$SNAPSHOT_DIR/meta.txt" | awk '{print $2}')
 
-# Общие для любого хоста: ресурсы, systemd-сервисы, firewall
-KEY_FILES="host-resources.txt host-services.txt firewall.txt"
+# Общие для любого хоста: ресурсы, systemd-сервисы, firewall.
+# МАССИВ, а не строка: zsh (оболочка macOS по умолчанию) не дробит `$VAR` на слова,
+# и `for f in $KEY_FILES` даёт ОДНУ итерацию со слипшимися именами — валидный снимок
+# объявляется битым. Проверено живым прогоном 2026-07-25 на zsh 5.9.
+KEY_FILES=(host-resources.txt host-services.txt firewall.txt)
 # Контейнерные — только там, где Docker реально работает
-[ "$HOST_KIND" = "docker" ] && KEY_FILES="$KEY_FILES containers.txt networks.txt"
+[ "$HOST_KIND" = "docker" ] && KEY_FILES+=(containers.txt networks.txt)
 
-for f in $KEY_FILES; do
+for f in "${KEY_FILES[@]}"; do
   [ -s "$SNAPSHOT_DIR/$f" ] || { echo "ОШИБКА: пустой ключевой файл $f"; ok=0; }
 done
 jq -e . "$SNAPSHOT_DIR/containers-inspect.json" >/dev/null 2>&1 \
@@ -284,7 +305,7 @@ find "$INVENTORY_DIR/hosts/<host>/snapshots/" -mindepth 1 -maxdepth 1 -type d \
 Освобождаю конкурентный лок (взят на Шаге 1) — иначе следующий скан упрётся в «уже идёт»:
 
 ```bash
-rm -rf "$LOCK"   # $INVENTORY_DIR/.scan.lock — снять в конце ИЛИ при любой отмене/ошибке
+release_lock   # функция из Шага 1: точечное удаление, без рекурсии
 ```
 
 # Bundled resources
