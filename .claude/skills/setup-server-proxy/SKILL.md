@@ -53,14 +53,8 @@ self-loop, на котором ломается панель 3X-UI без пра
 - Mixed inbound на 127.0.0.1:1080 (или передан другой PROXY_PORT) в панели,
   protocol=mixed, no auth, udp=false, **sniffing ENABLED**
   (destOverride: http/tls/quic — иначе domain-правила для серверных программ мертвы).
-- Routing rules для `inboundTag=mixed-server-proxy` по модели «золотая середина»
-  (6 правил, scoped на mixed-inbound, порядок сверху вниз):
-  1. `geoip:private` → direct;
-  2. `bittorrent` → blocked;
-  3. `geosite:category-ads-all` → blocked (реклама);
-  4. `geoip:ru` → direct;
-  5. `geosite:category-ru` + regex `.ru/.su/.рф` → direct;
-  6. default (этот inbound) → upstream (balancer или один outbound).
+- Routing rules для `inboundTag=mixed-server-proxy` по модели «золотая середина» —
+  шесть правил, scoped на mixed-inbound; канонический список и порядок — в Шаге 4.
 - `/etc/environment` обновлён: `http_proxy`, `https_proxy`, `no_proxy` (+ uppercase)
   с `socks5h://127.0.0.1:1080`.
 - Smoke check: `curl https://api.anthropic.com` через свежий SSH → HTTP/2;
@@ -155,16 +149,10 @@ REPORT_LANGUAGE=$(get_agent_field '.operator.language' '.language' ru)
 
 Решение по результату:
 
-- **`ALREADY_INSTALLED` (все 4 TRUE)** → серверный прокси уже настроен и
-  работает. STOP. Сообщаю оператору:
-  > «Серверный прокси уже работает (127.0.0.1:$PROXY_PORT). Я ничего не
-  > трогаю. Если конкретная программа не идёт через прокси (бот, aiohttp,
-  > anthropic SDK) — это **troubleshooting библиотеки**, не установки.
-  > Скорее всего нужно `trust_env=True` (aiohttp) или явный httpx-клиент
-  > (anthropic SDK issue #923 / openai SDK). Подробнее — `.claude/skills/
-  > setup-server-proxy/references/python-libs-with-proxy.md`. Хочешь
-  > пройти по конкретному кейсу — скажи, какая библиотека и что показывает
-  > трассировка.»
+- **`ALREADY_INSTALLED` (все 4 TRUE)** → прокси настроен и работает. STOP, ничего не
+  трогаю. Говорю оператору, что установка тут ни при чём: если конкретная программа не
+  идёт через прокси — это **troubleshooting библиотеки**, разбор и таблица кейсов в
+  `references/python-libs-with-proxy.md`. Прошу назвать библиотеку и показать трассировку.
 
 - **`PARTIAL` с `recommendation=troubleshoot`** (override и /etc/environment
   есть, но curl не работает) → проблема в текущей установке. Спрашиваю
@@ -306,9 +294,8 @@ Inventory (`networks.md`):
 - **Тип**: SOCKS5+HTTP (Mixed inbound в 3X-UI), sniffing ENABLED
 - **Адрес**: 127.0.0.1:$PROXY_PORT (только локально)
 - **DNS**: socks5h (DNS-резолв на прокси, без локального leak)
-- **Routing**: «золотая середина» (6 правил, scoped на mixed-inbound) —
-  private→direct, реклама/bittorrent→block, geoip:ru + category-ru + regex→direct,
-  остальное → $UPSTREAM_REF
+- **Routing**: «золотая середина», 6 правил, scoped на mixed-inbound (список — Шаг 4);
+  всё, что не РФ и не заблокировано, идёт в $UPSTREAM_REF
 - **Upstream**: $UPSTREAM_REF (через 3X-UI outbound)
 - **Защита**: systemd drop-in override для x-ui (предотвращает self-loop)
 - **Применение**: бот, скрипты, pip/npm/curl/git через HTTPS_PROXY env
@@ -337,13 +324,11 @@ Config (`infra-config.json`):
 1. ❗ Открыть НОВУЮ SSH-сессию (старые не подхватили env-vars).
 2. В новой сессии проверить: `env | grep -i proxy` — должны быть три строки.
 3. Программа, ради которой настраивали (бот / pip / npm) — должна работать.
-4. Если программа не использует HTTPS_PROXY автоматически (aiohttp, anthropic
-   SDK с issue #923, Go net/http) — см. references/python-libs-with-proxy.md.
+4. Если программа не использует HTTPS_PROXY автоматически — см.
+   references/python-libs-with-proxy.md.
 
-⚠ Известные исключения (Privoxy для них — отдельная задача):
-  - apt — не поддерживает SOCKS5
-  - Node.js https/http core — не уважает HTTPS_PROXY нативно
-  - Go stdlib — только HTTP/HTTPS-прокси, для SOCKS нужен golang.org/x/net/proxy
+⚠ Через SOCKS не пойдут вообще: apt, Node.js core http/https, Go stdlib.
+  Список и что с этим делать — references/pitfalls.md.
 ```
 
 # Откат
@@ -369,49 +354,20 @@ api_call DELETE "/panel/api/inbounds/del/$MIXED_INBOUND_ID"
 # vpn.server_proxy_enabled = false
 ```
 
-# Failed attempts (граблекейс)
+# Bundled resources
 
-- **🔴 Записал /etc/environment без override → панель упала с INVALIDARGUMENT** —
-  ГЛАВНАЯ грабля. Этот скилл всегда делает override **первым шагом**, и
-  `03-write-environment.sh` проверяет наличие override перед записью.
-- **`socks5://` без `h`** — Anthropic API возвращает 403 (DNS-leak +
-  геолокация). Скилл всегда пишет `socks5h`. См. `socks5-vs-socks5h.md`.
-- **mixed inbound на 0.0.0.0** — без auth прокси торчит в интернет → может
-  использоваться кем угодно. Скилл предупреждает и требует подтверждения
-  если оператор настаивает на не-127.0.0.1.
-- **Текущая SSH-сессия не подхватила env-vars** — это нормально, env-vars
-  читаются при login. Оператору надо exit + новый ssh, или `source /etc/environment`.
-- **Программа не уважает HTTPS_PROXY нативно (aiohttp, anthropic SDK)** — это
-  баги/особенности конкретных библиотек, см. `python-libs-with-proxy.md`.
-- **Sniffing на mixed-inbound 1080 выключен** — domain-правила (реклама, банки/сервисы
-  на `.com`) для серверных программ мертвы: прокси видит только IP. На боевом сервере
-  он был ВЫКЛ (эталон §2.2). `02-create-mixed-inbound.sh` всегда создаёт inbound со
-  sniffing `{enabled:true, destOverride:["http","tls","quic"]}`.
-- **Упрощённое `geoip:ru → direct, остальное → upstream` для прокси** — старая модель
-  (до 24 мая). Реклама не резалась, regex по TLD не было. Заменено на 6-правильную
-  модель «золотая середина», scoped на mixed-inbound (эталон §2.5/§3.2).
-- **`regexp:.*\\\\.ru$` (четыре бэкслеша в jq)** — давал рантайм-regex `\\.` (литеральный
-  бэкслеш), не матчил домены. Правильно — два бэкслеша в jq-источнике (`regexp:.+\\.ru$`).
+| Файл | Что это и когда открывать |
+|---|---|
+| `references/pitfalls.md` | **Когда шаг не сработал**: восемь граблей (главная — запись `/etc/environment` без override, петля и падение панели; `socks5` без `h`; inbound на `0.0.0.0`; выключенный sniffing; старая упрощённая модель маршрутизации; бэкслеши в jq-regex), четыре граничных случая и список того, что через SOCKS-прокси не пойдёт вообще (apt, Node.js core, Go stdlib) |
+| `references/socks5-vs-socks5h.md` | **Почему буква `h` критична**: где резолвится DNS и откуда берётся 403 от API |
+| `references/python-libs-with-proxy.md` | **Прокси настроен, а программа его не видит**: таблица библиотек и проблемных кейсов (`trust_env` у aiohttp, явный httpx-клиент для SDK). Открывать при вердикте `ALREADY_INSTALLED` на Шаге 0 — там проблема почти всегда в библиотеке, а не в установке |
+| `scripts/00-detect-existing.sh` | детекция существующей установки по четырём индикаторам (Шаг 0) |
+| `scripts/01-systemd-override-xui.sh` | drop-in override для x-ui — **первый шаг**, защита от петли (Шаг 2) |
+| `scripts/02-create-mixed-inbound.sh` | mixed inbound со sniffing, идемпотентно (Шаг 3) |
+| `scripts/04-add-proxy-routing.sh` | шесть правил «золотой середины», scoped на inbound (Шаг 4) |
+| `scripts/03-write-environment.sh` | запись `socks5h`-переменных с проверкой override (Шаг 5) |
+| `scripts/05-smoke-test.sh` | пять проверок через свежий SSH (Шаг 6) |
 
-# Граничные случаи
-
-- **На сервере уже есть свой mixed inbound на другом порту** → скилл идемпотентен,
-  использует существующий с указанным портом, или создаёт новый на свободном.
-- **upstream outbound — только в routing для VLESS-inbound, не для mixed** →
-  скилл явно добавляет правило `inboundTag=mixed-server-proxy → upstream`,
-  не зависит от существующих правил для vless-inbound.
-- **Нет балансировщика, один outbound** → скилл использует `outboundTag`
-  вместо `balancerTag` (auto-детект).
-- **Программа в Docker-контейнере** — env-vars из /etc/environment попадают
-  в контейнер только если явно пробросить: `environment: - HTTPS_PROXY`
-  в docker-compose. Скилл предупреждает в финальном отчёте.
-
-# Связанные документы
-
-- `references/python-libs-with-proxy.md` — таблица библиотек и проблемных кейсов.
-- `references/socks5-vs-socks5h.md` — почему буква `h` критична.
-- `../../knowledge/networking/_reference/vpn-protocols.md` §5 — серверный прокси теория.
-- `../../knowledge/networking/_reference/3x-ui-panel.md` §7.7 — подводный камень self-loop.
-- `../../knowledge/networking/_reference/3x-ui-api.md` — REST API для inbound/routing.
-- `decisions/0005-vpn-architecture.md` §4 — архитектурное решение.
-- `evals/triggers.md` — фразы оператора.
+Внешние источники: `knowledge/networking/_reference/vpn-protocols.md` §5 (теория серверного
+прокси), `3x-ui-panel.md` §7.7 (подводный камень self-loop), `3x-ui-api.md` (REST API для
+inbound и routing), `decisions/0005-vpn-architecture.md` §4 (архитектурное решение).
