@@ -134,7 +134,7 @@ STALE_COUNT=$(echo "$STALE" | jq 'length')
 > Web-исследование может занять 3-10 минут. Tavily расходует общий лимит на месяц,
 > поэтому я экономлю — иду в Tavily только за подтверждением WebSearch-находок.
 >
-> Подтверди старт: 'да' / 'давай' / 'погнали'.»
+> Подтверди старт: «да» / «давай» / «делай».»
 
 Без подтверждения — не запускаю web-запросы. Без `--mode=check`, оператор может
 сначала посмотреть что устарело, потом решить запускать актуализацию.
@@ -149,30 +149,9 @@ STALE_COUNT=$(echo "$STALE" | jq 'length')
    SOURCES=$(awk '/^---$/{c++; next} c==1 && /^  - /{sub("^  - ", ""); print}' "$FILE" | head -10)
    ```
 
-2. Для каждого URL — WebSearch с запросом контекста файла. Источники
-   разделены по слоям:
-
-   **`_live/` слой** (ежедневное состояние блокировок):
-   - frontline-ru.md: `site:ntc.party 2026 Russia VPN` + `site:gfw.report Russia`
-     + `site:blog.cloudflare.com Russia` + Mediazona/Meduza/Moscow Times последние недели
-   - frontline-cn.md: `site:gfw.report 2026` + greatfirewallguide.com + USENIX
-   - frontline-ir.md: arxiv preprints + Iran censorship reports 2026
-   - frontline-by.md: Carnegie + RFE/RL + CSO Meter Belarus 2026
-   - timeline.md: добавляются новые события из всех frontline-*
-
-   **`_reference/` слой** (устройство мира — реже меняется):
-   - vpn-protocols.md: `XTLS/Xray-core releases` + `SagerNet/sing-box releases`
-     + `MHSanaei/3x-ui releases`
-   - transports.md: новые transport-фичи в release notes XTLS/sing-box
-   - fronting-strategies.md: Cloudflare blog + новые CDN-fronting туториалы
-   - client-apps.md: `sing-box iOS client release` + `Hiddify release notes` +
-     `Karing release` + App Store removals
-   - 3x-ui-panel.md, 3x-ui-api.md: MHSanaei/3x-ui issues/releases
-
-   **`_meta/` слой** (стабильное, обновляется по запросу):
-   - sources-registry.md: добавление/удаление источников по факту
-   - glossary.md: новые термины (XHTTP, AnyTLS, и т.д.)
-   - conflicts.md: разрешение старых конфликтов
+2. Для каждого URL — WebSearch с запросом контекста файла. **Готовые формулы запросов
+   по каждому файлу и карта источников по трём слоям — `references/search-strategies.md`.**
+   Сочинять запросы заново не надо: беру оттуда и подставляю `<last_researched>`.
 
 3. Собираю результаты в один JSON-документ:
    ```json
@@ -215,28 +194,22 @@ new blocks since 2026-05-01 mobile operators differences"
 
 ## Шаг 4: Дифф и подтверждение (Yellow Zone)
 
-Для каждого файла, где найдены изменения, формирую **дифф-предложение**:
+Для каждого файла, где найдены изменения, формирую **дифф-предложение**. Скелет:
 
 ```
-=== vpn-protocols.md ===
+=== <файл> ===
+<раздел>
 
-§3.3 «Блокировки Reality в РФ»
+БЫЛО (на <дата last_researched>):   > <дословная цитата старого текста>
+ПРЕДЛАГАЮ (на <сегодня>):           > <новый текст> (источник: <URL>)
 
-БЫЛО (на 2026-05-15):
-> Reality с serverName=cloudflare.com работает стабильно. TSPU не блокирует
-> TLS-ClientHello с этим SNI.
-
-ПРЕДЛАГАЮ (на 2026-06-15):
-> Reality с serverName=cloudflare.com работает в большинстве регионов, но
-> с июня 2026 в Татарстане и Самарской области наблюдаются эпизодические фейлы
-> (источник: ntc.party/t/12345). Рекомендация: для критичных клиентов в этих
-> регионах использовать serverName=www.microsoft.com как fallback.
-
-Изменения в sources_checked:
-+ https://ntc.party/t/12345-reality-cloudflare-tatarstan-2026-06
+Изменения в sources_checked: + <URL>
 
 Применить? (да / нет / показать ещё контекст)
 ```
+
+Цитата «БЫЛО» — дословная, не пересказ: без неё оператор не заметит, что новая
+формулировка тише старой. Развёрнутый образец — `references/output-formats.md`.
 
 Оператор:
 - **«да»** — применяю Edit к файлу, добавляю URL в `sources_checked`, обновляю `last_researched`.
@@ -282,24 +255,18 @@ rm -f "${FILE}.bak"
 
 ## Шаг 7: Краткий отчёт
 
-```
-✅ Актуализация VPN-knowledge завершена
+Отчёт содержит пять блоков:
 
-Файлы обновлены с изменениями: 2
-  • vpn-protocols.md — §3.3 (новая инфа про Tatarstan), +1 источник
-  • client-apps.md — §2 (новая версия sing-box 1.13), +1 источник
+1. **Файлы, обновлённые с изменениями** — имя, какой раздел правился, сколько источников добавлено.
+2. **Файлы, обновлённые без изменений** (только дата) — отдельным списком, не вперемешку
+   с первым: там дата проставлена под ответственность оператора, а не потому, что знание
+   переписано.
+3. **Расход Tavily** — потрачено / бюджет.
+4. **Расход WebSearch** — число запросов (бесплатно).
+5. **ADR**, если был критический сдвиг, — путь к созданному документу.
 
-Файлы обновлены без изменений (контент актуален, только дата): 2
-  • 3x-ui-panel.md
-  • 3x-ui-api.md
-
-Tavily-запросов потрачено: 3 / 5 (осталось бюджета)
-Web-запросов через WebSearch: 12 (бесплатно)
-ADR создан: $INFRA/decisions/0006-reality-fallback-microsoft.md (если был сдвиг)
-
-Все 4 файла теперь last_researched=2026-06-15.
-Следующая проверка авто-сработает через 30 дней или при первой VPN-задаче.
-```
+Финальная строка — новая `last_researched` и когда сработает следующая проверка.
+Готовый образец отчёта — `references/output-formats.md`.
 
 # Анти-паттерны
 
@@ -314,3 +281,11 @@ ADR создан: $INFRA/decisions/0006-reality-fallback-microsoft.md (если 
 - **Не правь несколько файлов одним коммитом без разделения.** Если каждый
   файл актуализирован отдельно — это отдельные логические изменения, делай
   отдельные коммиты с описанием что именно изменилось.
+
+# Bundled resources
+
+| Файл | Что это и когда открывать |
+|---|---|
+| `references/search-strategies.md` | **Карта источников по трём слоям + готовые формулы запросов** под каждый knowledge-файл (WebSearch-набор, Tavily-формулировка, «что искать в первую очередь»). Открывать на Шаге 2, до первого запроса в сеть |
+| `references/output-formats.md` | **Образцы вывода**: развёрнутое дифф-предложение (Шаг 4) и финальный отчёт (Шаг 7) с пояснением, почему они устроены именно так |
+| `evals/triggers.md` | positive/negative фразы для проверки, что скилл подхватывается по адресу |
