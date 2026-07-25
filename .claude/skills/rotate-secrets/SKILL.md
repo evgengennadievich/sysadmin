@@ -124,8 +124,14 @@ printf "ALTER USER <role> WITH PASSWORD '%s';\n" "$NEW" | \
 # 4. Подменить во всех .env — пароль через stdin удалённого шелла, не в argv sed:
 #    (полный паттерн с awk/ENVIRON — в scripts/rotate-db-password.sh, шаг 3)
 
-# 5. Restart всех потребителей (минимальный downtime)
-for compose_dir in $CONSUMER_DIRS; do
+# 5. Restart всех потребителей (минимальный downtime).
+#    СПИСОК — МАССИВОМ, не строкой. zsh (оболочка macOS по умолчанию) не дробит `$VAR`
+#    на слова: `for d in $CONSUMER_DIRS` даёт ОДНУ итерацию со склеенными путями,
+#    на сервере `cd /opt/a /opt/b` падает с «too many arguments», `&&` обрывается —
+#    и ни один потребитель не перезапускается. Пароль в БД уже сменён, сервисы держат
+#    старый → отказ до ручного вмешательства. Найдено живым прогоном 2026-07-25.
+CONSUMER_DIRS=(/opt/apps/<сервис-1> /opt/apps/<сервис-2>)   # заполнить по факту
+for compose_dir in "${CONSUMER_DIRS[@]}"; do
     ssh "$SERVER" "cd $compose_dir && docker compose restart"
 done
 
