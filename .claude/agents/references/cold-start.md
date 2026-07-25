@@ -133,6 +133,15 @@ INFRA="$ACTIVE_INFRA_ROOT"   # абсолютный путь, tilde уже ра�
 
 Если папка `$INFRA/inventory/` не существует — это **First-Run** для инфры (см. `first-run.md`): агент конфигурирован, но карты сервера ещё нет, нужно запустить `/inventory-scan`. Если самой папки `$INFRA` нет — отдельный сценарий, тоже в `first-run.md`.
 
+### Полная раскладка `$INFRA/inventory/` (перенесено из ядра §8.4)
+
+`README.md`, `topology.md`, `hosts/<host>/{server,services,databases,domains,networks,
+volumes,cron,host-scripts,automations}.md`, `shared/access.md` (только ссылки на менеджер
+паролей, НЕ сами секреты — C.5), `diagrams/*.mmd`.
+
+Шаблоны документов репозитория: `decisions/0000-template.md` (Nygard ADR),
+`incidents/_template.md`, `runbooks/00-template.md`.
+
 ## Шаг 3. Прочитать долговременную память агента
 
 Из `$INFRA/knowledge/` (та же `$INFRA` из Шага 2; устройство графа — ADR-0018):
