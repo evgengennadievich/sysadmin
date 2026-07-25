@@ -305,24 +305,21 @@ SUBS_FILE="$INFRA_DIR/inventory/shared/vpn-subscriptions/${PROVIDER_SLUG:-subscr
    выдумывать страну: либо определить по гео-IP хоста (`curl ipinfo.io/<host>`),
    либо честно спросить оператора «сервер X — какая страна?».
 
-**5A.3 — Выбор пресета (стабильность vs живучесть).**
-Спросить (лишний вопрос не повредит, если объяснён):
-- **Пресет «одна страна + авто-failover» (рекомендуемый дефолт):** завести все
-  сервера выбранной страны как outbound, собрать в `leastPing`-балансир с
-  `probeInterval=5m`. Объяснить: «Работать будешь в основном с одного, самого
-  быстрого. Если он упадёт — незаметно переедешь на соседний, но страна та же,
-  аккаунт не пострадает. IP скакать не будет — переоценка редкая.»
-- **Пресет «один фиксированный сервер»:** если оператору критичен абсолютно
-  неизменный IP — завести ОДИН сервер выбранной страны, без балансира.
-  Объяснить минус: «Упадёт — переключим вручную.»
-- **Пресет «разные страны / самый быстрый пинг любой ценой» (только осознанно):**
-  балансир из серверов РАЗНЫХ стран. **Дефолтом НЕ предлагать, по своей инициативе
-  НЕ собирать** (рефлекс 3.8.6): скачущий IP = бан антифродом нейросетей (смена
-  страны в сессии = паттерн угона аккаунта). Если оператор просит сам — войти в роль
-  ментора и проговорить риск дословно (полный текст — `references/pitfalls.md`),
-  уточнить «это для нейронок или другого трафика?», при осознанном согласии —
-  `CONFIRM_MULTI_COUNTRY=yes` на Шаге 6. **Запрет:** не повторять ложь «балансир
-  между странами не влияет на блокировки» (приоритет №1 CLAUDE.md — фактически неверна).
+**5A.3 — Выбор пресета (стабильность vs живучесть).** Спрашиваю явно — лишний вопрос
+не повредит, если объяснён:
+
+| Пресет | Что делаю | Как объясняю оператору |
+|---|---|---|
+| **одна страна + авто-failover** (дефолт) | все сервера выбранной страны как outbound, `leastPing`-балансир, `probeInterval=5m` | «Работаешь в основном с одного, самого быстрого. Упадёт — незаметно переедешь на соседний, страна та же, аккаунт не пострадает. IP скакать не будет: переоценка редкая» |
+| **один фиксированный сервер** | один outbound, без балансира | «Абсолютно неизменный IP. Минус: упадёт — переключим вручную» |
+| **разные страны** (только осознанно) | балансир из серверов РАЗНЫХ стран | **дефолтом не предлагаю и по своей инициативе не собираю** (рефлекс §3.8.6) |
+
+Третий пресет — менторский разговор, а не переключатель. Скачущий IP = бан антифродом
+нейросетей: смена страны внутри сессии читается как угон аккаунта. Оператор просит сам —
+проговариваю риск дословно (полный текст — `references/pitfalls.md`), уточняю «это для
+нейросетей или для другого трафика?», и только при осознанном согласии ставлю
+`CONFIRM_MULTI_COUNTRY=yes` на Шаге 6. **Запрет:** не повторять ложь «балансир между
+странами не влияет на блокировки» — она фактически неверна (C.2).
 
 ```bash
 # Завести выбранные сервера как outbound
@@ -367,32 +364,26 @@ PROBE_INTERVAL=5m \
 > пример вызова — `references/pitfalls.md`). Симметрично `CONFIRM_REALITY_ON_RU` в
 > `create-vless-inbound.sh`. Рефлекс персоны 3.8.6 и ADR-0011.
 
-> 🧭 **Стратегия балансира — что выбирать.** Дефолт `leastPing` + `probeInterval=5m`
-> + сервера одной страны = стабильный IP в норме, авто-failover при падении, страна
-> не меняется. НЕ использовать `random`/`roundRobin` (размазывают трафик = скачущий
-> IP). Sticky-порог «N мс разницы» в панели 3X-UI ОТСУТСТВУЕТ — это клиентская
-> настройка sing-box (`urltest.tolerance`), не серверная (см. `3x-ui-panel.md` §1.3).
-> Если выбран пресет «один сервер» (Шаг 5A.3) — `USE_BALANCER=no`, балансир не
-> создаётся, default-правило шлёт на единственный outbound.
+> 🧭 **Стратегия балансира.** Дефолт — `leastPing` + `probeInterval=5m` + сервера одной
+> страны: стабильный IP в норме, авто-failover при падении, страна не меняется.
+> `random` и `roundRobin` НЕ использовать — размазывают трафик, IP скачет. Sticky-порога
+> «N мс разницы» в серверном балансире 3X-UI **нет** — это клиентская настройка sing-box
+> (`urltest.tolerance`), см. `3x-ui-panel.md` §1.3. Пресет «один сервер» (Шаг 5A.3) →
+> `USE_BALANCER=no`, default-правило шлёт на единственный outbound.
 
-Создаёт `routing.rules` по модели **«золотая середина»** — те же 7 правил, что
-перечислены в `<goals>` (порядок сверху вниз, первое совпавшее применяется; эталон
-`16-ЭТАЛОН-гибкой-маршрутизации-3xui.md` §2.5). Ключевое: `geoip:private`→direct
-отдельным приоритетным правилом (не в куче с РФ); реклама (`category-ads-all`) и
-bittorrent → blocked; РФ ловится `geoip:ru` + `category-ru` + regex `.ru/.su/.рф`
-(`.рф` в punycode `xn--p1ai`). **Явный список РФ-доменов на не-РФ TLD НЕ добавляется**
-(топ-сервисы на РФ-IP, ловятся `geoip:ru`; домены вроде `tinkoff.com` выдуманы —
-§2.6). Скрипт гарантирует наличие outbound `direct` (freedom) и `blocked` (blackhole).
+Скрипт создаёт `routing.rules` по модели **«золотая середина»** — те же 7 правил, что
+перечислены в `<goals>` (порядок сверху вниз, применяется первое совпавшее). Он же
+гарантирует наличие outbound `direct` (freedom) и `blocked` (blackhole), ставит
+`routing.domainStrategy = "IPIfNonMatch"`, а при `leastPing`/`leastLoad` добавляет
+observatory с `probeInterval=$PROBE_INTERVAL` (не устаревший `pingConfig`).
 
-При `leastPing`/`leastLoad` — добавляется observatory с
-`probeUrl=http://www.google.com/gen_204` и `probeInterval=$PROBE_INTERVAL`
-(по умолчанию `5m` — реже переоценка, стабильнее IP; НЕ устаревший `pingConfig`).
+Три решения внутри модели, которые легко нарушить по невнимательности: `geoip:private` →
+direct **отдельным приоритетным правилом**, не в куче с РФ; `.рф` в правилах пишется
+в punycode (`xn--p1ai`); **явный список РФ-доменов на не-РФ TLD НЕ добавляется** — топовые
+сервисы и так на РФ-адресах и ловятся `geoip:ru`, а придуманные домены нарушают C.2.
 
-`routing.domainStrategy = "IPIfNonMatch"` (включает sniffing-логику).
-
-> Идемпотентность: скрипт перезаписывает `.routing` целиком и доустанавливает
-> недостающие outbound `direct`/`blocked`, поэтому повторный запуск приводит
-> конфиг к той же эталонной модели.
+> Идемпотентность: скрипт перезаписывает `.routing` целиком и доустанавливает недостающие
+> outbound `direct`/`blocked` — повторный запуск приводит конфиг к той же эталонной модели.
 
 ## Шаг 7: Массовое добавление клиентов
 
@@ -423,41 +414,24 @@ api_get_xray_config | jq ".obj.routing.rules"
 
 ## Шаг 9: Обновление inventory и конфига
 
-Inventory — в `inventory/hosts/$SERVER_ALIAS/networks.md` добавляется раздел
-`## VPN routing` с подразделами:
+В `inventory/hosts/$SERVER_ALIAS/networks.md` — раздел `## VPN routing` с четырьмя
+подразделами: **Inbound** (порт, протокол, клиенты со ссылкой на UUID), **Outbound**
+(страна выхода, пресет, теги, файл серверов подписки), **Balancer** (стратегия и
+`probeInterval`; при пресете «один сервер» балансира нет), **Routing** (модель «золотая
+середина», 7 правил — перечень в `<goals>` и Шаге 6).
 
-- **Inbound** — `inbound-$INBOUND_PORT` (vless-`$INBOUND_PROTOCOL`); клиенты + ссылка
-  на UUID в `vpn-clients/*.md`.
-- **Outbound** — страна выхода `$EXIT_COUNTRY`, пресет `$OUTBOUND_PRESET`; теги
-  `upstream-*` (от провайдера ИЛИ свой загр.VPS); файл серверов подписки в
-  `shared/vpn-subscriptions/<provider>.json`.
-- **Balancer** — `upstream-balancer` (leastPing, observatory probeInterval=5m);
-  при пресете `single` балансира нет, один фиксированный outbound.
-- **Routing** — модель «золотая середина», 7 правил (перечень — в `<goals>` / Шаг 6).
+В `infra-config.json` — `vpn.upstream_kind` (`subscription` / `self-foreign` / `mixed`).
 
-`infra-config.json` — `vpn.upstream_kind` обновляется (`subscription` /
-`self-foreign` / `mixed`).
+Готовые образцы обоих блоков — `references/output-templates.md`.
 
 ## Шаг 10: Финальный отчёт
 
-```
-✓ Inbound создан/использован: id=$INBOUND_ID, port=$INBOUND_PORT, protocol=$INBOUND_PROTOCOL
-✓ Сервера подписки сохранены: $INFRA/inventory/shared/vpn-subscriptions/$PROVIDER_SLUG.json
-✓ Страна выхода: $EXIT_COUNTRY, пресет: $OUTBOUND_PRESET
-✓ Outbounds: $UPSTREAM_COUNT штук (только страны $EXIT_COUNTRY), kind=$OUTBOUND_KIND
-✓ Balancer: $BALANCER_STRATEGY, probeInterval=$PROBE_INTERVAL (если пресет country-failover)
-✓ Routing: 7 правил (private→direct, реклама/bittorrent→block, geoip:ru + category-ru + regex→direct, остальное→upstream)
-✓ Клиентов: $CLIENT_COUNT
-✓ Inventory обновлён: $INFRA/inventory/hosts/$SERVER_ALIAS/networks.md
-✓ Config обновлён: vpn.upstream_kind=$OUTBOUND_KIND
-
-🔍 Smoke check: открой панель $PANEL_URL (видны новые inbound/outbound/clients) →
-  выпусти ссылку клиента через /generate-client-config → импортируй в Happ/Hiddify →
-  проверь на 2ip.ru (РФ-сайты → твой РФ-IP, зарубежные → IP upstream; реклама режется).
-
-➡️  Следующий шаг (опционально): `/generate-client-config` для генерации
-    QR-кодов и sing-box JSON для клиентских устройств.
-```
+Отчёт перечисляет: созданный inbound, где лежат сервера подписки, страну выхода и пресет,
+число outbound, стратегию балансира, число правил маршрутизации, число клиентов, какие
+файлы inventory и конфига обновлены. Дальше — smoke-check оператору: открыть панель,
+выпустить клиентскую ссылку через `/generate-client-config`, импортировать в клиент и
+проверить на сайте определения IP, что РФ-сайты идут напрямую, а зарубежные — через
+upstream. Готовый текст — `references/output-templates.md`.
 
 # Откат
 
@@ -494,14 +468,21 @@ api_update_xray_config "$BACKUP_CONFIG_JSON" && api_restart_xray
   `/extract-subscription-servers`. Страна `?` → определить по гео-IP или спросить,
   не выдумывать (правило №1).
 
-# Связанные документы
+# Bundled resources
 
-- `/extract-subscription-servers` — извлечение серверов из подписки (в т.ч.
-  закрытых HWID-locked). Запускается ДО этого скилла, сохраняет сервера в infra.
-- `references/multi-hop-architectures.md` — два пути outbound + гибрид.
-- `decisions/0010-hwid-locked-subscriptions.md` — решение по HWID-замку и слотам.
-- `../../knowledge/networking/_reference/vpn-protocols.md` §4 — теория multi-hop.
-- `../../knowledge/networking/_reference/3x-ui-api.md` §6 — outbounds + routing через API.
-- `../../knowledge/networking/_reference/3x-ui-panel.md` §1.3-1.4 — balancers + observatory.
-- `decisions/0005-vpn-architecture.md` §3 — архитектурное решение.
-- `references/pitfalls.md` — полный список грабель и граничных случаев.
+| Файл | Что это и когда открывать |
+|---|---|
+| `references/multi-hop-architectures.md` | **Какой путь outbound выбрать**: подписка провайдера, свой заграничный VPS, гибрид «свой + подписка как fallback», архитектурные правила. Открывать на Шаге 1 (архитектурный диалог) |
+| `references/pitfalls.md` | **Грабли и граничные случаи** + два менторских разговора дословно: «разные страны в балансире» и «Reality на РФ-сервере». Открывать, когда оператор просит то, от чего guard защищает |
+| `references/output-templates.md` | **Образцы записей и отчёта**: раздел `## VPN routing` для `networks.md` и полный текст финального отчёта со smoke-check. Открывать на Шагах 9 и 10 |
+| `scripts/parse-vless-link.sh`, `add-outbound-from-vless.sh` | разбор ссылки и заведение outbound (Шаг 5) |
+| `scripts/create-vless-inbound.sh` | inbound с guard'ом `CONFIRM_REALITY_ON_RU` (Шаг 4) |
+| `scripts/setup-routing.sh` | маршрутизация и балансир с guard'ом `CONFIRM_MULTI_COUNTRY` (Шаг 6) |
+| `scripts/add-clients.sh` | массовое добавление клиентов с паузой против database lock (Шаг 7) |
+
+Соседние скиллы: `/extract-subscription-servers` — извлечение серверов из подписки
+(запускается ДО этого скилла), `/generate-client-config` — QR и конфиги для устройств
+(после). Внешние источники: `knowledge/networking/_reference/vpn-protocols.md` §4 (теория
+multi-hop), `3x-ui-api.md` §6 (outbounds и routing через API), `3x-ui-panel.md` §1.3–1.4
+(балансиры и observatory), `decisions/0005-vpn-architecture.md` §3 и
+`decisions/0010-hwid-locked-subscriptions.md`.
