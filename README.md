@@ -221,6 +221,9 @@ sysadmin/                          ← публичный репо (этот). �
 │   ├── 0015-persona-in-claude-md-entry-2.0.md   ← персона → CLAUDE.md (вход 2.0)
 │   └── 0016-brain-budget-kb-anti-ratchet.md   ← бюджет ядра в КБ + анти-храповик
 │
+├── research/                      ← конспекты внешних источников с датами (вход, не канон)
+│   └── context-engineering-2026-07/  ← контекст-инжиниринг для Claude 5: 12 принципов + разбор мозга
+│
 ├── agent-config.json              ← твой личный конфиг МОЗГА (оператор, проекты; в .gitignore)
 ├── agent-config.example.json      ← публичный шаблон конфига мозга
 ├── agent-config.schema.json       ← JSON Schema конфига мозга
@@ -317,6 +320,10 @@ infra/                             ← ТВОЯ ПРИВАТНАЯ папка (�
 3. **`.claude/skills/<имя>/SKILL.md`** — конкретный скилл, который тебя интересует
 4. **`decisions/0000-template.md`** — шаблон ADR. Когда будешь принимать своё
    архитектурное решение — копируй шаблон в свою `infra/decisions/` и заполняй.
+5. **[`research/`](research/README.md)** — на чём стоят решения по мозгу: конспекты внешних
+   источников с датами. Свежее — [контекст-инжиниринг для Claude 5](research/context-engineering-2026-07/README.md)
+   (июль 2026): 9 источников, [12 принципов описания мозга агента](research/context-engineering-2026-07/PRINCIPLES.md)
+   и [разбор нашего мозга по ним](research/context-engineering-2026-07/GAP-ANALYSIS.md).
 
 ---
 
