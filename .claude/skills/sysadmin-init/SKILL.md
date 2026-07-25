@@ -126,7 +126,7 @@ locate_sysadmin_root || SYSADMIN_ROOT="$(cd "$LIB/../../.." && pwd)"
 
 Мозг `agent-config.json` — в корне `sysadmin/` («дом агента», без перебора); карта
 `infra-config.json` — в папке проекта (`infra_root` из `projects[]`). Алгоритм = Cold Start
-персоны (`references/cold-start.md`): `find_brain_config` → `resolve_active_project` → его
+персоны (`.claude/agents/references/cold-start.md`): `find_brain_config` → `resolve_active_project` → его
 `infra-config.json`; перебор типичных путей — **только fallback** (новый/старый пользователь).
 Helper'ы и `$SYSADMIN_ROOT` доступны из Шага 0.0.
 
