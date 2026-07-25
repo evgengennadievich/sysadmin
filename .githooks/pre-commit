@@ -95,6 +95,7 @@ fi
 SHELLCODE_TOUCHED=0
 case "$STAGED" in *".claude/skills/"*)            SHELLCODE_TOUCHED=1 ;; esac
 case "$STAGED" in *".claude/agents/"*)            SHELLCODE_TOUCHED=1 ;; esac
+case "$STAGED" in *".claude/knowledge/"*)         SHELLCODE_TOUCHED=1 ;; esac
 
 if [ "$SHELLCODE_TOUCHED" -eq 1 ]; then
     PORTLINT="$ROOT/scripts/check-shell-portability.sh"
@@ -114,7 +115,7 @@ if [ "$SHELLCODE_TOUCHED" -eq 1 ]; then
         while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-                .claude/skills/*.md|.claude/agents/*.md)
+                .claude/skills/*.md|.claude/agents/*.md|.claude/knowledge/*.md)
                     [ -f "$ROOT/$f" ] && STAGED_MD+=("$ROOT/$f") ;;
             esac
         done <<EOF

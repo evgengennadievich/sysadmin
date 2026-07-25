@@ -132,7 +132,113 @@ fi
 echo
 
 # ═══════════════════════════════════════════════════════════════════════════
-echo "[5] Текущее состояние репозитория"
+echo "[5] Обход замка: конструкции, найденные проверщиком 25.07.2026"
+# ═══════════════════════════════════════════════════════════════════════════
+# Первая версия линтера ловила 2 конструкции из 26 — независимый проверщик написал
+# фикстуру обхода. Каждая строка ниже проверена живым запуском в zsh 5.9: она
+# действительно ведёт себя не так, как в bash. Секция держит покрытие от отката.
+i=0
+for probe in \
+    'systemctl restart $SERVICES' \
+    'docker compose -f $COMPOSE_FILES up -d' \
+    'cd $CONSUMER_DIRS' \
+    'set -- $DIRS' \
+    'for d in $A $B; do echo x; done' \
+    'echo "${#parts[0]}"' \
+    'echo "${parts[0]:-нет}"' \
+    'echo "${parts[ 0 ]}"' \
+    'echo "$parts[0]"' \
+    'arr[0]="первый"' \
+    'echo "${v^^}"' \
+    'echo "${v,,}"' \
+    'echo "${!name}"' \
+    'echo "${BASH_REMATCH[1]}"' \
+    '[ -n "$BASH_VERSION" ] && echo bash' \
+    'echo "${BASH_SOURCE[0]}"' \
+    "read -d '' -a parts <<< \"\$line\""
+do
+    i=$((i+1))
+    f="$(fixture "evade-$i.md" "$probe")"
+    if bash "$LINTER" --root "$WORK" "$f" >/dev/null 2>&1; then
+        bad "ОБХОД: не поймано → $probe"
+    else
+        ok "поймано: $probe"
+    fi
+done
+
+# Разметка: забор в другом регистре и тильда-забор скрывали блок целиком
+{ echo '```BASH'; echo 'for f in $KEY_FILES; do echo "$f"; done'; echo '```'; } > "$WORK/case.md"
+if bash "$LINTER" --root "$WORK" "$WORK/case.md" >/dev/null 2>&1; then
+    bad 'ОБХОД: забор ```BASH в верхнем регистре скрывает блок'
+else
+    ok 'забор ```BASH (верхний регистр) проверяется'
+fi
+{ echo '~~~bash'; echo 'shopt -s nullglob'; echo '~~~'; } > "$WORK/tilde.md"
+if bash "$LINTER" --root "$WORK" "$WORK/tilde.md" >/dev/null 2>&1; then
+    bad 'ОБХОД: тильда-забор ~~~bash скрывает блок'
+else
+    ok 'тильда-забор ~~~bash проверяется'
+fi
+echo
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo "[6] Ложные срабатывания на чужой оболочке: heredoc и ssh"
+# ═══════════════════════════════════════════════════════════════════════════
+# Код внутри heredoc уходит в файл с шебангом bash или на сервер — там bash-конструкции
+# законны. Репозиторий сисадмина полон таких мест, и блокировать их нельзя.
+{ echo '```bash'; echo "cat > /tmp/run.sh <<'SCRIPT'"; echo 'for f in $KEY_FILES; do echo "$f"; done';
+  echo 'SCRIPT'; echo '```'; } > "$WORK/heredoc-file.md"
+if bash "$LINTER" --root "$WORK" "$WORK/heredoc-file.md" >/dev/null 2>&1; then
+    ok 'heredoc в файл с шебангом bash — не блокируется'
+else
+    bad 'ЛОЖНОЕ: заблокирован heredoc, уходящий в bash-скрипт'
+fi
+
+{ echo '```bash'; echo "ssh host bash <<'REMOTE'"; echo 'shopt -s nullglob'; echo 'REMOTE'; echo '```'; } > "$WORK/heredoc-ssh.md"
+if bash "$LINTER" --root "$WORK" "$WORK/heredoc-ssh.md" >/dev/null 2>&1; then
+    ok 'heredoc на удалённый bash — не блокируется'
+else
+    bad 'ЛОЖНОЕ: заблокирован heredoc, уходящий на сервер'
+fi
+
+{ echo '```bash'; echo 'ssh "$SERVER" "cd $compose_dir && docker compose restart"'; echo '```'; } > "$WORK/ssh-inline.md"
+if bash "$LINTER" --root "$WORK" "$WORK/ssh-inline.md" >/dev/null 2>&1; then
+    ok 'команда в кавычках для чужой оболочки — не блокируется'
+else
+    bad 'ЛОЖНОЕ: заблокирована удалённая команда в кавычках'
+fi
+
+for probe in \
+    'cd "$INFRA_DIR" && git status' \
+    'systemctl restart "$UNIT"' \
+    'docker compose -f "$FILE" up -d'
+do
+    i=$((i+1))
+    f="$(fixture "quoted-$i.md" "$probe")"
+    if bash "$LINTER" --root "$WORK" "$f" >/dev/null 2>&1; then
+        ok "квотированная переменная пропущена: $probe"
+    else
+        bad "ЛОЖНОЕ срабатывание на корректном коде: $probe"
+    fi
+done
+echo
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo "[7] Пустой список файлов не роняет линтер"
+# ═══════════════════════════════════════════════════════════════════════════
+# bash 3.2 (штатный на macOS) + set -u: "${FILES[@]}" на пустом массиве — фатальная
+# ошибка, маскирующаяся под «найдены нарушения» (тот же код возврата 1).
+EMPTY="$(mktemp -d)"
+if out="$(bash "$LINTER" --root "$EMPTY" 2>&1)" && [ "${out#*unbound}" = "$out" ]; then
+    ok "дерево без скиллов: выход 0, без unbound variable"
+else
+    bad "падение на пустом списке файлов: $out"
+fi
+rmdir "$EMPTY" 2>/dev/null
+echo
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo "[8] Текущее состояние репозитория"
 # ═══════════════════════════════════════════════════════════════════════════
 if bash "$LINTER" --root "$ROOT" >/dev/null 2>&1; then
     ok "репозиторий чист"

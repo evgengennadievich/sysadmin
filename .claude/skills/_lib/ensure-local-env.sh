@@ -188,7 +188,11 @@ EOF
 
 # --- Инструкция по установке bash (нативный Windows без Git for Windows) ---
 _bash_manual_hint() {
-    cat <<'EOF' >&2
+    # Подсказка зависит от ОС: советовать Git for Windows владельцу Linux —
+    # бессмыслица, которая выглядит как поломка агента (замечено 2026-07-25).
+    case "$(_detect_local_os)" in
+        MINGW|unknown)
+            cat <<'EOF' >&2
 Claude Code на Windows использует bash только если установлен Git for Windows.
 Без него команды идут через PowerShell, и скиллы агента не работают.
 Поставь Git for Windows (в нём есть Git Bash):
@@ -196,6 +200,27 @@ Claude Code на Windows использует bash только если уст�
   - или вручную: https://git-scm.com/download/win (значения по умолчанию)
 После установки ПЕРЕЗАПУСТИ сессию Claude Code.
 EOF
+            ;;
+        Darwin)
+            cat <<'EOF' >&2
+На macOS bash есть из коробки (/bin/bash). Если этой команды нет или Claude Code
+работает в непривычной оболочке — проверь:
+  which bash          — путь к bash
+  echo "$SHELL"       — какая оболочка по умолчанию
+Скиллы рассчитаны на bash или zsh. После изменений ПЕРЕЗАПУСТИ сессию Claude Code.
+EOF
+            ;;
+        *)
+            cat <<'EOF' >&2
+Нужен bash (скрипты скиллов запускаются им) и оболочка bash или zsh.
+Установка в типовых дистрибутивах:
+  apt install bash      (Debian/Ubuntu)
+  dnf install bash      (Fedora/RHEL)
+  apk add bash          (Alpine)
+После установки ПЕРЕЗАПУСТИ сессию Claude Code.
+EOF
+            ;;
+    esac
 }
 
 # --- Главная функция гейта ---
