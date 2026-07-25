@@ -236,42 +236,15 @@ bash "$SYSADMIN_ROOT/.claude/skills/sysadmin-init/scripts/migrate-legacy.sh" \
 | 6. Telegram | `notifications.telegram.{enabled,bot_username,chat_type}` | карта | лёгкая |
 | 6.5. VPN | `vpn.*` (флаги, заполнят VPN-скиллы) | карта | лёгкая |
 
-**Раунд 1.5 (проект + путь к инфре).** Дефолт `infra_root` — `../infra` (сосед `sysadmin/`),
-лучше абсолютный путь. `id` нормализую в kebab-case (regex `^[a-z0-9][a-z0-9-]*$`); если
-родителя пути нет — повторяю вопрос (опечатка). `default_project = projects[0].id` (v1.0 —
-один проект). Записываю `infra_root` как ввёл оператор (резолвер раскроет tilde).
+Операционные детали каждого раунда — какие именно поля, enum'ы, regex-проверки и значения
+по умолчанию уходят в конфиг — в `references/wizard-flow.md`, раздел «Операционные детали
+раундов». Там же разобраны две ловушки схемы: `retention` — **объект** `{daily,weekly,monthly}`,
+а не строка; `bot_username` — без `@`.
 
-**Раунд 2 (менеджер паролей).** Enum `keychain`/`bitwarden`/`1password`/`pass`/`keepassxc`/
-`other`; дефолт по OS (macOS→`keychain`, Linux→`pass`). Для известных — `cli_available:true`.
-Ветка **«Другой менеджер»** (research CLI + честный выбор «остаться руками / перейти на
-Bitwarden») — полностью в `wizard-flow.md` §«Другой менеджер»; пишу `manager_name` +
-`cli_available` по результату ресёрча. Подсказка: реальные значения — не сюда, а в
-`/setup-secrets-vault`.
-
-**Раунд 3 (сервер).** Если `ssh_aliases` в `detect-defaults.json` непуст — выбор из
-найденных (radio), иначе спрашиваю вручную. `role`: `production`/`staging`/`test`/`personal`.
-**v1.0 — один сервер**; про второй: «добавишь вручную в `servers[]`, схема разрешает массив
-≥1» (см. `references/edge-cases.md`).
-
-**Раунд 4 (мониторинг).** `enabled` → при включении `stack` (массив из enum) и
-`panel_domain` (hostname, regex `^[a-z0-9.-]+$`). Варианты: не ставить / базовый
-(uptime-kuma+beszel) / полный (+dozzle+dockge+diun, ★ для production).
-
-**Раунд 5 (бэкапы).** `enabled` → `destination` (enum: `yandex-disk-webdav` для РФ /
-`s3`/`b2` / `nextcloud-webdav` / `local`(не советую)), `rclone_remote` (для webdav-вариантов,
-regex `^[a-zA-Z][a-zA-Z0-9_-]+$`), `retention`. **⚠️ `retention` — ОБЪЕКТ `{daily,weekly,
-monthly}` (целые), НЕ строка** (схема `additionalProperties:false`). Дефолт `{daily:7,
-weekly:4,monthly:6}` (можно описать как «7д-4н-6м», но в конфиг пишется объектом).
-
-**Раунд 6 (Telegram).** `enabled` → `bot_username` (без `@`, regex
-`^[a-zA-Z][a-zA-Z0-9_]{4,31}$`; создать через @BotFather), `chat_type` (`personal`/`channel`).
-Реальный токен — в менеджер паролей, не сюда.
-
-**Раунд 6.5 (VPN).** Заготовка секции под VPN-скиллы. Если включил: `vpn.enabled=false`,
-`panel_url=null`, `panel_web_base_path=null`, `server_proxy_enabled=false`,
-`upstream_kind="none"`, `default_reality_dest="www.cloudflare.com"`. Конкретные значения
-впишет `/setup-vpn-panel`. Не включил — секция не добавляется (попросят
-`--reconfigure` при первом `/setup-vpn-panel`).
+**v1.0 — один сервер и один проект.** Про второй сервер отвечаю честно: «добавишь вручную
+в `servers[]`, схема разрешает массив» (подробности — `references/edge-cases.md`).
+Реальные секреты (токен бота, пароли) не спрашиваю вовсе — они живут в менеджере паролей,
+их заводит `/setup-secrets-vault`.
 
 ## Шаг 8: Сборка ДВУХ JSON во временные файлы
 
@@ -441,7 +414,7 @@ tmp=$(mktemp) && jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 
 Где работать дальше: открывай Claude Code в РОДИТЕЛЬСКОЙ папке (рядом sysadmin/ + папка
 инфры) — оба репо видны сразу. @sysadmin технически зовётся из любой папки (подхвачу
-конфиги по Cold Start, см. references/cold-start.md).
+конфиги по Cold Start, см. `.claude/agents/references/cold-start.md` в sysadmin/).
 
 Что дальше — пошагово:
   1. [inventory/hosts/ пуст] /bootstrap-new-server — SSH/UFW/fail2ban/Docker/git на {server.alias}.
@@ -491,4 +464,18 @@ bash, пустой `~/.ssh/config`, multi-server/multi-project, «давай к�
 - **Тон — на «ты», по-русски, партнёрский.** Не «Вы», не «вы», не на английском.
 - **Сеньор-обёртка применяется только к 3 сложным вопросам.** Простые вопросы (имя,
   язык, ssh_alias из найденных) — без обёртки, чтобы не утомлять оператора.
-- **Никаких нарративных вставок «Василий сказал...».** Только императив, без рассказов.
+- **Никаких нарративных вставок «оператор тогда сказал…».** Только императив, без рассказов
+  о прошлых сессиях: скилл универсален и не привязан к конкретному человеку.
+
+# Bundled resources
+
+| Файл | Что это и когда открывать |
+|---|---|
+| `references/wizard-flow.md` | **Полные сеньор-обёртки раундов интервью**: мини-урок, таблицы плюсов и минусов, обоснования, обработка ответов — для Раундов 1.5 (проект и путь к инфре), 2 (менеджер паролей, включая ветку «другой менеджер»), 4 (мониторинг), 5 (бэкапы). Открывать перед соответствующим раундом; в SKILL.md по ним только затравка |
+| `references/edge-cases.md` | **Когда что-то пошло не так**: Failed Attempts и все граничные случаи — миграция legacy-конфига, повреждённый конфиг, прерванное интервью, нативный Windows без bash, пустой `~/.ssh/config`, несколько серверов и проектов, ответ «давай как ты советуешь» |
+| `scripts/detect-defaults.sh` | автодетект окружения одним JSON (Шаг 0.1) — «не задавай вопрос, на который отвечает системный файл» |
+| `scripts/migrate-legacy.sh` | ветка миграции старого единого конфига (Шаг 0.2) |
+| `scripts/assemble-configs.sh` | сборка двух draft'ов из skeleton'ов (Шаг 8) |
+| `scripts/validate-config.sh` | валидация обоих файлов ДО записи в финальное место (Шаг 9) |
+| `scripts/write-configs.sh` | backup + запись + FINAL CHECK (Шаг 10) |
+| `templates/agent-config-skeleton.json`, `infra-config-skeleton.json` | заготовки мозга и карты

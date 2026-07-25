@@ -297,3 +297,50 @@ hostname (regex `^[a-z0-9.-]+$`).
 - *`templates/agent-config-skeleton.json`, `templates/infra-config-skeleton.json`*
 - *`agent-config.schema.json` + `infra-config.schema.json` корня репо (контракты полей)*
 - *`decisions/0013-config-split-brain-vs-infra.md` (расщепление конфига, ADR-0013)*
+
+---
+
+# Операционные детали раундов (поля, enum, regex, дефолты)
+
+Эта секция — точные значения, которые уходят в конфиг: какие поля, какие enum'ы, какие
+regex-проверки, что по умолчанию. Разделы выше объясняют, **как разговаривать** с оператором;
+здесь — **что записать** по итогам разговора.
+
+Открывать вместе с таблицей раундов из `SKILL.md`, Шаги 2–7.5.
+
+**Раунд 1.5 (проект + путь к инфре).** Дефолт `infra_root` — `../infra` (сосед `sysadmin/`),
+лучше абсолютный путь. `id` нормализую в kebab-case (regex `^[a-z0-9][a-z0-9-]*$`); если
+родителя пути нет — повторяю вопрос (опечатка). `default_project = projects[0].id` (v1.0 —
+один проект). Записываю `infra_root` как ввёл оператор (резолвер раскроет tilde).
+
+**Раунд 2 (менеджер паролей).** Enum `keychain`/`bitwarden`/`1password`/`pass`/`keepassxc`/
+`other`; дефолт по OS (macOS→`keychain`, Linux→`pass`). Для известных — `cli_available:true`.
+Ветка **«Другой менеджер»** (research CLI + честный выбор «остаться руками / перейти на
+Bitwarden») — полностью в `wizard-flow.md` §«Другой менеджер»; пишу `manager_name` +
+`cli_available` по результату ресёрча. Подсказка: реальные значения — не сюда, а в
+`/setup-secrets-vault`.
+
+**Раунд 3 (сервер).** Если `ssh_aliases` в `detect-defaults.json` непуст — выбор из
+найденных (radio), иначе спрашиваю вручную. `role`: `production`/`staging`/`test`/`personal`.
+**v1.0 — один сервер**; про второй: «добавишь вручную в `servers[]`, схема разрешает массив
+≥1» (см. `references/edge-cases.md`).
+
+**Раунд 4 (мониторинг).** `enabled` → при включении `stack` (массив из enum) и
+`panel_domain` (hostname, regex `^[a-z0-9.-]+$`). Варианты: не ставить / базовый
+(uptime-kuma+beszel) / полный (+dozzle+dockge+diun, ★ для production).
+
+**Раунд 5 (бэкапы).** `enabled` → `destination` (enum: `yandex-disk-webdav` для РФ /
+`s3`/`b2` / `nextcloud-webdav` / `local`(не советую)), `rclone_remote` (для webdav-вариантов,
+regex `^[a-zA-Z][a-zA-Z0-9_-]+$`), `retention`. **⚠️ `retention` — ОБЪЕКТ `{daily,weekly,
+monthly}` (целые), НЕ строка** (схема `additionalProperties:false`). Дефолт `{daily:7,
+weekly:4,monthly:6}` (можно описать как «7д-4н-6м», но в конфиг пишется объектом).
+
+**Раунд 6 (Telegram).** `enabled` → `bot_username` (без `@`, regex
+`^[a-zA-Z][a-zA-Z0-9_]{4,31}$`; создать через @BotFather), `chat_type` (`personal`/`channel`).
+Реальный токен — в менеджер паролей, не сюда.
+
+**Раунд 6.5 (VPN).** Заготовка секции под VPN-скиллы. Если включил: `vpn.enabled=false`,
+`panel_url=null`, `panel_web_base_path=null`, `server_proxy_enabled=false`,
+`upstream_kind="none"`, `default_reality_dest="www.cloudflare.com"`. Конкретные значения
+впишет `/setup-vpn-panel`. Не включил — секция не добавляется (попросят
+`--reconfigure` при первом `/setup-vpn-panel`).
