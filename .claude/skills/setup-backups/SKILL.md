@@ -241,55 +241,27 @@ install -m 0755 scripts/check-backup-age.sh /opt/infra/scripts/backup/check-back
 Без этого шага скилл НЕ считается завершённым. Бэкап, который ни разу не восстанавливали, —
 это надежда, а не бэкап.
 
-**Ветка «БД на сервере ещё нет»** (свежий сервер: bootstrap → backups ДО переноса данных —
-боевой кейс bronto 2026-07-09). Конвейер всё равно проверяется целиком, на синтетике:
-1. Поднять тестовый контейнер (образ = будущий прод, для pgvector-кластера —
-   `pgvector/pgvector:pg16`), создать БД с известным числом строк
-   (`INSERT ... SELECT ... FROM generate_series(1,1234)`).
-2. Прогнать **оркестратор целиком** — `backup-all.sh` (не отдельный `backup-postgres.sh`!),
-   читая тот же `/root/.backup-env`, что и cron → restore из хранилища во второй контейнер →
-   сверить counts. **Почему именно оркестратор, а не отдельный дамп-скрипт:** только полный
-   прогон воспроизводит cron-окружение и ловит баги экспорта конфига (`set -a`, см. Failed
-   Attempts) — вызов restic вручную с экспортированными переменными их маскирует.
-3. Уборка: оба контейнера удалить, `restic forget --tag e2e-test --prune` (тестовый snapshot
-   не должен жить в боевом репозитории), локальные дампы стереть, в env-конфиге список
-   контейнеров оставить ПУСТЫМ с TODO «заполнить при переносе БД».
-⚠️ Грабля ожидания: `pg_isready` отвечает успехом и на ВРЕМЕННЫЙ сервер initdb (entrypoint
-запускает его и перезапускает) — после первого успеха подожди 5-10 сек и проверь повторно,
-иначе `createdb` попадает в щель рестарта («socket ... failed»).
+**Ветка «БД на сервере ещё нет»** (свежий сервер: бэкапы настраиваются ДО переноса данных).
+Конвейер всё равно проверяется целиком, на синтетике: тестовый контейнер с известным числом
+строк → прогон **оркестратора `backup-all.sh`** (не отдельного дамп-скрипта!) → restore во
+второй контейнер → сверка counts → уборка обоих контейнеров и тестового snapshot
+(`restic forget --tag e2e-test --prune`). Полная процедура ветки и грабля ожидания
+`pg_isready` — `references/pipeline-pitfalls.md`.
 
-Процедура (для PostgreSQL — для MySQL/Redis см. `references/restic-quirks.md`):
+**Ветка «БД уже есть» — боевая сверка.** Порядок восстановления PostgreSQL канонический и
+описан по шагам в `references/pg-restore-order.md` (образ контейнера → globals → `createdb`
+→ `pg_restore` → сверка row counts); там же готовые команды, игнорируемые ошибки и
+pgvector. Здесь не дублирую — открываю справочник и иду по нему. Для MySQL и Redis
+пошагового справочника нет; что известно и чего не проверяли — `references/pipeline-pitfalls.md`.
+
+Каркас прогона:
 
 ```bash
-# 1. Извлечь свежий snapshot во временную папку
-restic restore latest --target /tmp/restore-test
-
-# 2. Поднять временный контейнер (важно: образ совпадает с продом!)
-# Для БД с pgvector — обязательно pgvector/pgvector:pg16, не чистый postgres:16!
-docker run -d --name pg-restore-test \
-  -e POSTGRES_PASSWORD=testpassword \
-  -p 5433:5432 \
-  pgvector/pgvector:pg16
-
-until docker exec pg-restore-test pg_isready -U postgres; do sleep 1; done
-
-# 3. Восстановить globals (роли) → создать БД → залить dump
-docker exec -i pg-restore-test psql -U postgres < /tmp/restore-test/opt/backups/dbs/globals_*.sql
-docker exec pg-restore-test createdb -U postgres <main-db>
-docker exec -i pg-restore-test pg_restore -U postgres -d <main-db> --no-owner --no-privileges \
-  < /tmp/restore-test/opt/backups/dbs/<main-db>_*.dump
-
-# 4. Сверить row counts с продом
-PROD_COUNT=$(docker exec <prod-pg-container> psql -U postgres -d <main-db> -tAc \
-  "SELECT count(*) FROM <main-table>")
-TEST_COUNT=$(docker exec pg-restore-test psql -U postgres -d <main-db> -tAc \
-  "SELECT count(*) FROM <main-table>")
-
-echo "PROD=$PROD_COUNT TEST=$TEST_COUNT"
-[ "$PROD_COUNT" = "$TEST_COUNT" ] && echo "OK" || echo "MISMATCH — БЛОКЕР"
-
-# 5. Удалить временный контейнер только после успешной сверки
-docker rm -f pg-restore-test
+restic restore latest --target /tmp/restore-test     # 1. извлечь свежий snapshot
+# 2-4. поднять временный контейнер тем же образом, что на проде,
+#      восстановить globals → createdb → pg_restore   (см. pg-restore-order.md)
+# 5. сверить row counts главной таблицы: прод против временного контейнера
+docker rm -f pg-restore-test                          # 6. только после успешной сверки
 ```
 
 **Verify:** row counts совпадают (допуск ±несколько записей от дневной активности между
@@ -307,81 +279,27 @@ docker rm -f pg-restore-test
 
 Финальная строка runbook: `Last verified: YYYY-MM-DD, by <agent>, on <production-host>`.
 
-# Параметризация по типу хранилища
+# Что помню до чтения справки
 
-| Хранилище | RESTIC_REPOSITORY | Дополнительно |
-|-----------|-------------------|---------------|
-| AWS S3 | `s3:s3.amazonaws.com/<bucket>/backups/infra` | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` в env |
-| Backblaze B2 | `b2:<bucket>:backups/infra` | `B2_ACCOUNT_ID` + `B2_ACCOUNT_KEY` в env |
-| WebDAV (Я.Диск / NextCloud / ownCloud) | `rclone:<remote>:backups/infra` | `rclone config` создать remote (тип webdav, endpoint провайдера — например, `https://webdav.yandex.ru` для Я.Диска) |
-| S3-совместимое (MinIO / Wasabi / Yandex Object Storage) | `s3:<endpoint>/<bucket>/backups/infra` | `AWS_*` env с подменённым endpoint |
+Три правила обязаны срабатывать сразу, иначе бэкап будет выглядеть настроенным и не быть им:
 
-# Failed Attempts (граблекейс)
+- **Бэкап без проверенного restore — не бэкап.** Шаг 7 не пропускается никогда, а прогон
+  идёт **через сам `backup-all.sh`**: ручной вызов restic с руками экспортированными
+  переменными маскирует главный класс багов (разбор — `references/pipeline-pitfalls.md`).
+- **Потеря passphrase = потеря всех бэкапов навсегда.** AES-256 без ключа не расшифровать.
+  Passphrase живёт в менеджере паролей оператора, а не в конфиге и не в git.
+- **Managed-БД этот скилл не покрывает.** Увидел RDS / Managed Postgres / Supabase — говорю
+  честно, что нужен другой подход, и не изображаю настройку.
 
-- **«Запуск без конфига инфры (`infra-config.json`)»** — раньше скилл требовал кучу CLI-параметров,
-  оператор вспоминал какие обязательные. Урок: скилл не угадывает намерения. Нет конфига —
-  `exit 1` с указанием на `/sysadmin-init`. `backups.enabled=false` — `exit 0` с
-  указанием на `/sysadmin-init --reconfigure`. Никаких defaults «как у меня».
-- **«pg_dump с хоста»** — несовместимость версий клиента (хост) и сервера (контейнер) ломает
-  дамп. ВСЕГДА `docker exec <container> pg_dumpall` — внутри контейнера версии гарантированно
-  совпадают.
-- **«restic forget без --prune»** — `forget` помечает snapshot'ы удалёнными в индексе, но не
-  освобождает место в хранилище. Всегда `forget --prune` (или отдельный `prune` в воскресенье).
-- **«rclone WebDAV без --transfers 1»** — некоторые WebDAV-провайдеры (в частности
-  Яндекс.Диск) тротлят при параллельных upload'ах. В `/root/.config/rclone/rclone.conf`
-  для соответствующего remote указать `transfers = 1`.
-- **«backup-all c set -e»** — одна упавшая БД останавливает весь прогон, остальные не
-  бэкапятся. set -e ОТКЛЮЧИТЬ для оркестратора (`set -uo pipefail` достаточно).
-- **«source конфига без `set -a` → restic не видит репозиторий»** — `source /root/.backup-env`
-  читает переменные в текущий шелл, но `restic`/`rclone` — **дочерние процессы**, и без
-  экспорта они не наследуют `RESTIC_REPOSITORY` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
-  Симптом: дампы БД проходят (`SUCCESS`), а `restic backup` падает `Fatal: Please specify
-  repository location`. Скрипты оборачивают `source` в `set -a … set +a`. **Коварство**
-  (bronto 2026-07-09): ручной e2e-restore-тест это НЕ ловит — там оператор экспортирует
-  переменные руками перед вызовом restic; баг всплывает только на автономном cron-прогоне.
-  Поэтому Шаг 7 обязан гонять restore **через сам `backup-all.sh`**, не в обход него.
-- **«ежедневный prune»** — `restic prune` через WebDAV-хранилища занимает 30+ минут
-  на крупных репозиториях. Запускать только по воскресеньям, daily — только `forget`
-  без `--prune`.
-- **«passphrase в env-файле без chmod 600»** — любой пользователь с доступом на чтение
-  получает ключ к расшифровке всех бэкапов. `chmod 600 /root/.backup-env` обязательно.
-- **«curl к алерт-каналу без таймаута»** — при недоступном api.telegram.org (реальный кейс:
-  с одного Selectel-IP timeout, с соседнего работает — сегмент/DPI) скрипт висит НАВСЕГДА,
-  ежедневный cron копит зависшие процессы. Урок (bronto 2026-07-09): всем curl в скриптах
-  скилла добавлен `-m 20`; недоступный канал = WARNING в лог и жить дальше, не зависание.
-- **«multipart-огрызки в S3-совместимом — бесплатны и невидимы»** — нет: Selectel складывает
-  фрагменты оборванных загрузок в скрытый служебный контейнер `*_s3multipartuploads` и
-  ТАРИФИЦИРУЕТ его (боевой кейс 2026-07-09: 233 МБ мусора с июня; известный чужой кейс —
-  551 ГБ). `rclone cleanup` через штатный ListMultipartUploads их может НЕ видеть — тогда
-  чистить содержимое служебного контейнера напрямую (`rclone delete <remote>:<bucket>_s3multipartuploads`).
-  В cron-шаблон добавлена еженедельная чистка.
+# Bundled resources
 
-# Граничные случаи
-
-- **pgvector** — для restore-test нужен образ `pgvector/pgvector:pg16`, не чистый
-  `postgres:16`. Тип `public.vector` не существует в чистом postgres → pg_restore падает с
-  `ERROR: type "public.vector" does not exist`. См. `references/pg-restore-order.md`.
-- **Порядок restore PostgreSQL**: globals (`pg_dumpall --globals-only`) → `createdb` →
-  `pg_restore`. Нарушение даёт ошибки `role does not exist` или `owner not found`.
-- **Redis dump** — `redis-cli BGSAVE`, потом скопировать `dump.rdb`. НЕ `redis-cli SAVE` —
-  блокирует БД на больших датасетах (минутами).
-- **Большие БД (>5 ГБ)** — добавить `--ignore-inode` в `restic backup`; pg_dump может
-  занимать >1 часа. Окно cron возможно перенести на 02:00 / 01:00.
-- **БД на отдельной машине / managed (AWS RDS, Yandex Managed Postgres, Google Cloud SQL,
-  Supabase и т.п.)** — этот скилл не покрывает. Нужен другой подход: либо managed snapshots
-  провайдера, либо отдельный backup-узел с доступом к БД через приватную сеть.
-- **Хранилище без публичного IP** — для S3-API через приватный VPC: добавить
-  `--insecure-no-password` или endpoint override. См. `references/restic-quirks.md`.
-
-# Связанные ресурсы
-
-- `scripts/backup-postgres.sh` — дамп одной PostgreSQL БД
-- `scripts/backup-mysql.sh` — дамп одной MySQL/MariaDB БД
-- `scripts/backup-redis.sh` — дамп Redis (BGSAVE + копия dump.rdb)
-- `scripts/backup-all.sh` — оркестратор всех дампов + restic backup + retention
-- `scripts/check-backup-age.sh` — алерт «бэкап старше 36 часов» в канал оператора
-  (Telegram / Slack / email — выбирается параметром `ALERT_CHANNEL`)
-- `templates/backup-cron-d` — `/etc/cron.d/backup` шаблон
-- `templates/backup-restore-runbook.md` — шаблон для генерации `runbooks/backup-restore.md`
-- `references/restic-quirks.md` — известные грабли restic + WebDAV / S3 / B2
-- `references/pg-restore-order.md` — порядок globals → createdb → pg_restore + pgvector edge case
+| Файл | Что это и когда открывать |
+|---|---|
+| `references/pipeline-pitfalls.md` | **Обвязка ведёт себя не так, как обещано**: `source` без `set -a` (самая дорогая грабля, симптом «дампы SUCCESS, restic Fatal»), `pg_dump` с хоста, `set -e` в оркестраторе, Redis `SAVE` вместо `BGSAVE`, `curl` без таймаута, тарифицируемые multipart-огрызки, права на env-файл, граничные случаи (большие БД, managed, приватная сеть) |
+| `references/restic-quirks.md` | **Сам restic и хранилища**: форма `RESTIC_REPOSITORY` по типам, WebDAV-тротлинг и `transfers = 1`, права bucket-полиси, `forget` без `--prune`, параметры backup, безопасность passphrase, производительность, таблица частых ошибок |
+| `references/pg-restore-order.md` | **Порядок восстановления PostgreSQL**: globals → `createdb` → `pg_restore`, pgvector (нужен образ `pgvector/pgvector`, иначе `type "public.vector" does not exist`), игнорируемые ошибки, сверка row counts, большие БД и параллельный restore. Открывать на Шаге 7 |
+| `scripts/backup-postgres.sh`, `backup-mysql.sh`, `backup-redis.sh` | дампы по типам БД (Шаг 3) |
+| `scripts/backup-all.sh` | оркестратор: все дампы + `restic backup` + retention (Шаг 4) |
+| `scripts/check-backup-age.sh` | алерт «бэкап старше 36 часов» в канал оператора (Шаг 6) |
+| `templates/backup-cron-d` | шаблон `/etc/cron.d/backup` (Шаг 5) |
+| `templates/backup-restore-runbook.md` | шаблон `runbooks/backup-restore.md` (Шаг 8) |
