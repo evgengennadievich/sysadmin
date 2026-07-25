@@ -84,6 +84,53 @@ if [ "$KNOWLEDGE_TOUCHED" -eq 1 ]; then
     fi
 fi
 
+# ===========================================================================
+# 3. ПЕРЕНОСИМОСТЬ inline-кода скиллов и персоны (ADR-0028)
+#    Код в ```bash-блоках агент вставляет в оболочку ОПЕРАТОРА, а на macOS это zsh.
+#    Три бага этого класса уже стоили работы (живой прогон 2026-07-25): проверка
+#    снимка inventory-scan объявляла валидный снимок битым; rotate-secrets не
+#    перезапускал НИ ОДНОГО потребителя после смены пароля БД; гейт окружения
+#    отказывал на маке с советом поставить Git for Windows.
+# ===========================================================================
+SHELLCODE_TOUCHED=0
+case "$STAGED" in *".claude/skills/"*)            SHELLCODE_TOUCHED=1 ;; esac
+case "$STAGED" in *".claude/agents/"*)            SHELLCODE_TOUCHED=1 ;; esac
+
+if [ "$SHELLCODE_TOUCHED" -eq 1 ]; then
+    PORTLINT="$ROOT/scripts/check-shell-portability.sh"
+    if [ ! -f "$PORTLINT" ]; then
+        echo "⚠️  pre-commit: скиллы меняются, но линтер переносимости не найден ($PORTLINT) — пропускаю." >&2
+    else
+        echo "pre-commit: коммит трогает скиллы → проверяю переносимость inline-кода…" >&2
+        # Проверяем ТОЛЬКО staged md-файлы: чужие давние огрехи не должны блокировать
+        # правку, к которой они не относятся.
+        #
+        # МАССИВ, а не строка с пробелами. Путь к репозиторию у оператора может
+        # содержать пробелы (боевой случай: «…/Claude Code/sysadmin»), и склейка
+        # путей в одну строку с последующим раскрытием без кавычек разбивает их
+        # на куски — линтер получает несуществующие файлы и рапортует «чисто».
+        # Поймано живым тестом замка 2026-07-25: плохой коммит прошёл насквозь.
+        STAGED_MD=()
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$f" in
+                .claude/skills/*.md|.claude/agents/*.md)
+                    [ -f "$ROOT/$f" ] && STAGED_MD+=("$ROOT/$f") ;;
+            esac
+        done <<EOF
+$STAGED
+EOF
+        if [ "${#STAGED_MD[@]}" -gt 0 ]; then
+            if ! bash "$PORTLINT" --root "$ROOT" "${STAGED_MD[@]}" >&2; then
+                echo >&2
+                echo "❌ pre-commit: в inline-коде есть конструкции, ломающиеся в zsh." >&2
+                echo "   Почини по подсказкам выше. Обход (редко): git commit --no-verify" >&2
+                FAIL=1
+            fi
+        fi
+    fi
+fi
+
 if [ "$FAIL" -ne 0 ]; then
     echo >&2
     echo "🔴 pre-commit ЗАБЛОКИРОВАН — см. причины выше." >&2
