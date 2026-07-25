@@ -1,5 +1,7 @@
 # временная проба замка
 
 ```bash
-for f in $KEY_FILES; do echo "$f"; done
+CONSUMER_DIRS=(/opt/a /opt/b)
+for d in "${CONSUMER_DIRS[@]}"; do ssh "$S" "cd $d"; done
+echo "${arr[1]}"
 ```
