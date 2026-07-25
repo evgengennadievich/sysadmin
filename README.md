@@ -179,10 +179,11 @@ sysadmin/                          ← публичный репо (этот). �
 │   │   └── tests/                 ← 49 тестов замков (прогон вручную, bash <файл>)
 │   ├── settings.json              ← подключение замков (едет вместе с репо, включать не надо)
 │   ├── knowledge/                 ← общие доменные знания (ADR-0003)
-│   │   └── networking/            ← VPN-домен в 3 слоях (ADR-0006)
-│   │       ├── _live/             ← фронт борьбы по странам (RU/CN/IR/BY) + timeline, TTL 14 дней
-│   │       ├── _reference/        ← протоколы/панель/клиенты/транспорты/fronting, TTL 60 дней
-│   │       └── _meta/             ← источники, глоссарий, конфликты, TTL 365 дней
+│   │   ├── networking/            ← VPN-домен в 3 слоях (ADR-0006)
+│   │   │   ├── _live/             ← фронт борьбы по странам (RU/CN/IR/BY) + timeline, TTL 14 дней
+│   │   │   ├── _reference/        ← протоколы/панель/клиенты/транспорты/fronting, TTL 60 дней
+│   │   │   └── _meta/             ← источники, глоссарий, конфликты, TTL 365 дней
+│   │   └── agent-runtime/         ← устройство среды: транскрипт, как строить замки (нужен /dev)
 │   └── skills/                    ← 22 операционных скилла + dev + retro (конструкторы мозга)
 │       ├── dev/                   ← /dev: правка самого агента (персона/скиллы/ADR/knowledge)
 │       ├── retro/                 ← /retro: пострефлексия сессии — разбор диалога, находки → backlog/ADR
@@ -209,7 +210,7 @@ sysadmin/                          ← публичный репо (этот). �
 │       ├── cleanup-existing-server/
 │       └── migrate-server-to-server/
 │
-├── decisions/                     ← ADR-канон + 16 архитектурных решений
+├── decisions/                     ← ADR-канон + 28 архитектурных решений
 │   ├── 0000-template.md
 │   ├── 0001-skill-canon.md
 │   ├── 0002-persona-canon.md
@@ -242,6 +243,13 @@ sysadmin/                          ← публичный репо (этот). �
 ├── infra-config.schema.json       ← JSON Schema конфига карты инфры
 │
 ├── retro/                         ← петля самоулучшения: правила разбора сессии (retro/README.md)
+├── .githooks/                     ← ★ ЗАМОК КОММИТА: персона, знания, переносимость inline-кода
+│                                     (включается один раз: git config core.hooksPath .githooks)
+├── scripts/                       ← линтеры и валидаторы мозга (прогон вручную и из pre-commit)
+│   ├── validate-knowledge.py      ← целостность базы знаний: frontmatter, слои, ссылки, сироты
+│   ├── check-shell-portability.sh ← inline-код скиллов не должен ломаться в zsh (ADR-0028)
+│   ├── test-shell-portability.sh  ← тест этого линтера: 22 проверки, данные из истории git
+│   └── run-evals.sh               ← прогон evals/triggers.md по скиллам
 ├── docs/archive/                  ← исторические артефакты (docs/archive/README.md)
 │
 ├── README.md                      ← этот файл (для человека)
