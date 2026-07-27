@@ -120,6 +120,74 @@ else
 fi
 echo
 
+# ═══════════════════════════════════════════════════════════════════════════
+echo "[7] Находки проверщика 27.07.2026 — закрыты ли"
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 7.1 Команда, игнорирующая TERM: сторож обязан добить её KILL и объявить негодной.
+# Было: 25 с при лимите 3 с, и оборванный вывод отдавался как ВАЛИДНЫЙ дайджест.
+cfg="$(make_config ignore-term.json "trap '' TERM; sleep 25")"
+started=$(date +%s)
+out="$(bash "$SUT" --config "$cfg" --timeout 2 2>&1)"; rc=$?
+elapsed=$(( $(date +%s) - started ))
+[ "$rc" -eq 0 ] && ok "команда, игнорирующая TERM → выход 0" || bad "выход $rc"
+if [ "$elapsed" -le 10 ]; then ok "добита за ${elapsed}с при лимите 2с (эскалация до KILL работает)"
+else bad "лимит не соблюдён: ${elapsed}с при лимите 2с"; fi
+case "$out" in
+    *"НЕ СОБРАНО"*) ok "прерванный вывод объявлен негодным, а не выдан за дайджест" ;;
+    *) bad "оборванный вывод отдан как дайджест: $out" ;;
+esac
+
+# 7.2 Осиротевшие процессы: сторож не должен переживать собственный вызов.
+before=$(pgrep -c sleep 2>/dev/null || echo 0)
+cfg="$(make_config quick.json "echo быстро")"
+bash "$SUT" --config "$cfg" --timeout 25 >/dev/null 2>&1
+sleep 1
+after=$(pgrep -c sleep 2>/dev/null || echo 0)
+if [ "$after" -le "$before" ]; then ok "сирот не осталось (sleep: $before → $after)"
+else bad "остались осиротевшие процессы (sleep: $before → $after)"; fi
+
+# 7.3 Утечка секрета в ветке ОШИБКИ: маскировка обязана работать и там.
+# Было: redact.sh подключался ПОСЛЕ этой ветки, диагностика уезжала сырой.
+cfg="$(make_config errsecret.json "echo 'сбой, TOKEN=sk-ant-SEKRET99999' >&2; exit 7")"
+out="$(bash "$SUT" --config "$cfg" --timeout 5 2>&1)"
+case "$out" in
+    *sk-ant-SEKRET99999*) bad "секрет из диагностики упавшей команды утёк сырым" ;;
+    *"НЕ СОБРАНО"*)       ok "диагностика упавшей команды маскируется" ;;
+    *)                    bad "неожиданный вывод: $out" ;;
+esac
+
+# 7.4 Маскировка не должна тихо отключаться при запуске из чужого каталога.
+cfg="$(make_config fromelsewhere.json "printf 'API_TOKEN=abcdef1234567890\\nтело\\n'")"
+out="$( cd / && bash "$SUT" --config "$cfg" --timeout 5 2>&1 )"
+case "$out" in
+    *abcdef1234567890*) bad "из чужого каталога маскировка отключилась молча" ;;
+    *тело*)             ok "маскировка работает независимо от текущего каталога" ;;
+    *)                  bad "вывод потерян: $out" ;;
+esac
+
+# 7.5 BOM в карте инфры: причина отказа должна быть верной, а не «поля нет».
+printf '\xef\xbb\xbf' > "$WORK/bom.json"
+python3 -c "
+import json,sys
+json.dump({'version':'1.0','state':{'mode':'rebuild','digest_cmd':'echo из-BOM-конфига'}},
+          open(sys.argv[1],'a',encoding='utf-8'),ensure_ascii=False)" "$WORK/bom.json"
+out="$(bash "$SUT" --config "$WORK/bom.json" --timeout 5 2>&1)"
+case "$out" in
+    *"из-BOM-конфига"*) ok "карта инфры с BOM читается" ;;
+    *"не объявлено state.digest_cmd"*) bad "BOM даёт ЛОЖНУЮ причину: поле объявлено" ;;
+    *) bad "неожиданный вывод на конфиге с BOM: $out" ;;
+esac
+
+# 7.6 Успешный код, пустой stdout, что-то в stderr — это предупреждение, не снимок.
+cfg="$(make_config stderronly.json "echo 'сервер недоступен, показываю кэш' >&2")"
+out="$(bash "$SUT" --config "$cfg" --timeout 5 2>&1)"
+case "$out" in
+    *"НЕ СОБРАНО"*) ok "предупреждение при пустом stdout не выдаётся за дайджест" ;;
+    *) bad "предупреждение подано под шапкой дайджеста: $out" ;;
+esac
+echo
+
 echo "────────────────────────────────────────────────────────"
 printf 'PASS: %s   FAIL: %s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
