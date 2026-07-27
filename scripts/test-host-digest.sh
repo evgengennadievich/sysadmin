@@ -145,25 +145,44 @@ esac
 # переусыновляются к init — и `pkill -P` их уже не находит. Лечение — своя группа
 # процессов и убийство группы. Проверяем именно тот случай, который ломался,
 # и по УНИКАЛЬНОМУ маркеру, а не по общему числу `sleep` в системе.
-MARK="host-digest-orphan-probe-$$"
-cfg="$(make_config orphan.json "trap '' TERM; sleep 37 # $MARK")"
-before=$(pgrep -f "$MARK" 2>/dev/null | wc -l | tr -d ' ')
-bash "$SUT" --config "$cfg" --timeout 2 >/dev/null 2>&1
-sleep 1
-after=$(pgrep -f "$MARK" 2>/dev/null | wc -l | tr -d ' ')
-if [ "$after" -le "$before" ]; then ok "сирот не осталось после добивания группы (было $before, стало $after)"
-else bad "осталось осиротевших процессов: $after (было $before)"; fi
-pkill -9 -f "$MARK" 2>/dev/null
+# Маркер обязан быть виден в argv. ВТОРАЯ редакция этой проверки была фикцией ровно
+# так же, как первая, только незаметнее: маркер стоял в КОММЕНТАРИИ оболочки, до `exec`
+# не доходил, `pgrep -f` не видел его никогда — и тест зеленел даже на заведомо дырявой
+# версии скрипта (проверщик 27.07.2026 доказал это прогоном против старого коммита).
+# Теперь маркер — уникальная длительность `sleep`, она реально попадает в argv.
+SLEEP_A=40017
+SLEEP_B=40019
+pkill -9 -f "sleep $SLEEP_A" 2>/dev/null; pkill -9 -f "sleep $SLEEP_B" 2>/dev/null
 
-# 7.2б Тот же вопрос для команды с ФОНОВЫМ ребёнком: он переживает родителя иначе.
-MARK2="host-digest-child-probe-$$"
-cfg="$(make_config orphan2.json "sleep 39 # $MARK2 & wait")"
-bash "$SUT" --config "$cfg" --timeout 2 >/dev/null 2>&1
+cfg="$(make_config orphan.json "trap '' TERM; sleep $SLEEP_A")"
+bash "$SUT" --config "$cfg" --timeout 2 >/dev/null 2>&1 &
+probe_pid=$!
 sleep 1
-left=$(pgrep -f "$MARK2" 2>/dev/null | wc -l | tr -d ' ')
-if [ "$left" -eq 0 ]; then ok "фоновый ребёнок команды тоже добит"
-else bad "фоновый ребёнок пережил сторожа: $left процессов"; fi
-pkill -9 -f "$MARK2" 2>/dev/null
+seen=$(pgrep -f "sleep $SLEEP_A" 2>/dev/null | wc -l | tr -d ' ')
+wait "$probe_pid" 2>/dev/null
+sleep 1
+left=$(pgrep -f "sleep $SLEEP_A" 2>/dev/null | wc -l | tr -d ' ')
+# Контроль вакуумности: если маркер не виден ВО ВРЕМЯ работы, проверка ничего не значит.
+if [ "$seen" -gt 0 ]; then ok "маркер виден в argv во время работы ($seen) — проверка не вакуумна"
+else bad "маркер не виден в argv: проверка сирот ничего не доказывает"; fi
+if [ "$left" -eq 0 ]; then ok "сирот не осталось: команда, игнорирующая TERM, добита группой"
+else bad "осталось осиротевших процессов: $left"; fi
+pkill -9 -f "sleep $SLEEP_A" 2>/dev/null
+
+# 7.2б Внук: команда порождает ребёнка, который тоже игнорирует TERM.
+cfg="$(make_config orphan2.json "bash -c \"trap '' TERM; sleep $SLEEP_B\" & wait")"
+bash "$SUT" --config "$cfg" --timeout 2 >/dev/null 2>&1 &
+probe_pid=$!
+sleep 1
+seen2=$(pgrep -f "sleep $SLEEP_B" 2>/dev/null | wc -l | tr -d ' ')
+wait "$probe_pid" 2>/dev/null
+sleep 1
+left2=$(pgrep -f "sleep $SLEEP_B" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$seen2" -gt 0 ]; then ok "внук виден в argv во время работы ($seen2)"
+else bad "внук не виден в argv: проверка вакуумна"; fi
+if [ "$left2" -eq 0 ]; then ok "внук добит вместе с группой"
+else bad "внук пережил сторожа: $left2 процессов"; fi
+pkill -9 -f "sleep $SLEEP_B" 2>/dev/null
 
 # 7.3 Утечка секрета в ветке ОШИБКИ: маскировка обязана работать и там.
 # Было: redact.sh подключался ПОСЛЕ этой ветки, диагностика уезжала сырой.

@@ -26,15 +26,22 @@ set -u
 LINES=60
 TMO=8
 CONFIG_OVERRIDE=""
+# `shift 2` при одном оставшемся аргументе возвращает ошибку и НЕ сдвигает — разбор
+# зацикливается навсегда. Для скрипта, который обязан всегда завершаться, это хуже
+# ненулевого кода: выхода нет вовсе. Поймано проверщиком 27.07.2026 (`--lines` последним).
+# Числовые значения проверяем: мусор в `--timeout` давал ложный таймаут, мусор
+# в `--lines` — шапку дайджеста с пустым телом и без слова «НЕ СОБРАНО».
 while [ $# -gt 0 ]; do
     case "$1" in
-        --lines)   LINES="${2:-60}"; shift 2 ;;
-        --timeout) TMO="${2:-8}";    shift 2 ;;
-        --config)  CONFIG_OVERRIDE="${2:-}"; shift 2 ;;
+        --lines)   shift; case "${1:-}" in ''|*[!0-9]*) LINES=60 ;; *) LINES="$1" ;; esac; [ $# -gt 0 ] && shift ;;
+        --timeout) shift; case "${1:-}" in ''|*[!0-9]*) TMO=8   ;; *) TMO="$1"   ;; esac; [ $# -gt 0 ] && shift ;;
+        --config)  shift; CONFIG_OVERRIDE="${1:-}"; [ $# -gt 0 ] && shift ;;
         -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
         *) shift ;;
     esac
 done
+[ "$LINES" -gt 0 ] 2>/dev/null || LINES=60
+[ "$TMO"   -gt 0 ] 2>/dev/null || TMO=8
 
 # Корень берём от РАСПОЛОЖЕНИЯ скрипта, а не от текущего каталога. Прежняя версия
 # считала его через `git rev-parse` от cwd: при запуске из чужого каталога рядом не
@@ -101,9 +108,18 @@ print(((cfg.get("state") or {}).get("digest_cmd") or "").strip())
 PY
 )"
 
-[ -n "$DIGEST_CMD" ] || not_collected \
-    "в карте инфры не объявлено state.digest_cmd" \
-    "объяви его через /sysadmin-init --reconfigure либо собери состояние скиллом /inventory-scan"
+if [ -z "$DIGEST_CMD" ]; then
+    # Отличаем «поля нет» от «файл битый или закрыт правами»: раньше оба случая давали
+    # одну причину, и оператора отправляли перенастраивать конфиг вместо починки файла.
+    if ! python3 -c 'import json,sys; json.load(open(sys.argv[1],encoding="utf-8-sig"))' "$INFRA_CONFIG" 2>/dev/null; then
+        [ -r "$INFRA_CONFIG" ] || not_collected \
+            "карта инфры не читается (нет прав): $INFRA_CONFIG" "проверь права на файл"
+        not_collected "карта инфры повреждена — не разбирается как JSON: $INFRA_CONFIG" \
+            "почини файл; структуру создаёт /sysadmin-init"
+    fi
+    not_collected "в карте инфры не объявлено state.digest_cmd" \
+        "объяви его через /sysadmin-init --reconfigure либо собери состояние скиллом /inventory-scan"
+fi
 
 # ─── 3. Выполняем — с ограничением по времени ────────────────────────────────
 # Сторож нужен, потому что подстановка исполняется ДО того, как агент начнёт ход:
@@ -122,11 +138,22 @@ trap 'rm -f "$OUT_FILE" "$ERR_FILE" "$TMO_MARK" 2>/dev/null' EXIT
 # Маскировка подключается ДО запуска команды: в первой редакции она стояла ниже ветки
 # ошибки, и диагностика упавшей команды уезжала в транскрипт СЫРОЙ. Падающие ssh/curl/psql
 # регулярно эхоят креды в тексте ошибки (§6.1: вывод инструмента — такой же носитель).
+REDACT_OK=0
 if [ -f "$SELF_DIR/redact.sh" ]; then
     # shellcheck disable=SC1091
-    . "$SELF_DIR/redact.sh"
+    . "$SELF_DIR/redact.sh" 2>/dev/null && command -v redact_stream >/dev/null 2>&1 && REDACT_OK=1
 fi
-mask() { if command -v redact_stream >/dev/null 2>&1; then redact_stream; else cat; fi; }
+# Тихо снятая защита хуже отсутствующей — это записано в шапке файла, но до сих пор
+# не выполнялось: без `redact.sh` рядом (или при битом файле) маскировка молча
+# превращалась в `cat`, и секреты уходили сырыми. Проверщик 27.07.2026 показал четыре
+# утечки. Теперь отсутствие защиты — повод отказаться от печати, а не работать вслепую.
+mask() { if [ "$REDACT_OK" -eq 1 ]; then redact_stream; else cat; fi; }
+if [ "$REDACT_OK" -eq 0 ]; then
+    printf 'НЕ СОБРАНО: библиотека маскировки секретов (_lib/redact.sh) не найдена или не читается\n'
+    printf 'Печатать вывод сервера без маскировки нельзя: транскрипт переживает сессию (§6.1)\n'
+    printf 'Как получить вручную: выполни state.digest_cmd сам\n'
+    exit 0
+fi
 
 # Запускаем команду в СОБСТВЕННОЙ группе процессов (`set -m` включает управление
 # заданиями, и фоновое задание получает свой pgid). Иначе добить её потомков нельзя:
@@ -156,11 +183,13 @@ wait "$CMD_PID" 2>/dev/null
 RC=$?
 # Сторожа и его собственный sleep снимаем оба: иначе на каждую загрузку скилла
 # оставался жить лишний процесс на весь лимит («после себя убираю», §3.10).
-kill "$WATCH_PID" 2>/dev/null
-pkill -P "$WATCH_PID" 2>/dev/null
-wait "$WATCH_PID" 2>/dev/null
+# Снятие сторожа глушим целиком: оболочка печатает job-notification со ВСЕМ телом
+# сторожа в stderr, а stderr подстановки уезжает в тело скилла. Агент при каждой
+# загрузке получал «Terminated: 15» и текст с `kill -KILL` — читается как сбой.
+# Регрессия внесена коммитом 68fe3f4 и поймана проверщиком в тот же день.
+{ kill "$WATCH_PID" 2>/dev/null; pkill -P "$WATCH_PID" 2>/dev/null; wait "$WATCH_PID" 2>/dev/null; } 2>/dev/null
 # Подстраховка: если команда всё-таки пережила сторожа, группу добиваем здесь.
-kill -KILL -"$CMD_PID" 2>/dev/null
+{ kill -KILL -"$CMD_PID" 2>/dev/null; } 2>/dev/null
 
 FETCHED="$(date '+%Y-%m-%d %H:%M')"
 
@@ -211,7 +240,10 @@ printf 'Дата СБОРКИ дайджеста на сервере — вну�
 printf 'извлекает и не гарантирует. Не нашлась — так и скажи оператору (§4.6).\n'
 printf -- '---\n'
 
-mask < "$OUT_FILE" | head -n "$LINES"
+# Потолок по байтам, а не только по строкам: вывод в 40 МБ ОДНОЙ строкой проходил
+# `head -n` целиком и уезжал в контекст (проверщик 27.07.2026). Контекст исчерпаем.
+MAXBYTES=100000
+mask < "$OUT_FILE" | head -n "$LINES" | head -c "$MAXBYTES"
 
 TOTAL="$(wc -l < "$OUT_FILE" | tr -d ' ')"
 if [ "$TOTAL" -gt "$LINES" ]; then
