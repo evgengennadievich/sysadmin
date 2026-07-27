@@ -54,7 +54,7 @@ allowed-tools: Bash, Read
 
 ## Шаг 0: Дайджест состояния, приехавший вместе со скиллом
 
-!`bash "$(git rev-parse --show-toplevel 2>/dev/null)/.claude/skills/_lib/host-digest.sh" 2>/dev/null || true`
+!`r=$(git rev-parse --show-toplevel 2>/dev/null); s="$r/.claude/skills/_lib/host-digest.sh"; if [ -n "$r" ] && [ -f "$s" ]; then bash "$s"; else echo "НЕ СОБРАНО: переходник host-digest.sh не найден — сессия открыта не в репозитории мозга; работаю по шагам ниже"; fi || true`
 
 Снимок выше собран **до** того, как я прочитал скилл: командой `state.digest_cmd` из карты
 инфры оператора, ничего не хардкожено (ADR-0029). Как им пользоваться:

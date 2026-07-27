@@ -200,7 +200,8 @@ sysadmin/                          ← публичный репо (этот). �
 │       ├── setup-server-proxy/    ← прокси для программ на сервере
 │       ├── generate-client-config/← vless/sing-box/QR для устройств
 │       ├── refresh-vpn-knowledge/ ← актуализация VPN-knowledge раз в месяц
-│       ├── _lib/                  ← общие helper-скрипты (find-config, check-knowledge-freshness)
+│       ├── _lib/                  ← общие helper-скрипты (find-config, check-knowledge-freshness,
+│                                     host-digest — снимок состояния для живой подстановки, ADR-0030)
 │       ├── health-check/
 │       ├── inventory-scan/
 │       ├── deploy-service/
@@ -210,7 +211,7 @@ sysadmin/                          ← публичный репо (этот). �
 │       ├── cleanup-existing-server/
 │       └── migrate-server-to-server/
 │
-├── decisions/                     ← ADR-канон + 28 архитектурных решений
+├── decisions/                     ← ADR-канон + 30 архитектурных решений
 │   ├── 0000-template.md
 │   ├── 0001-skill-canon.md
 │   ├── 0002-persona-canon.md
@@ -247,8 +248,11 @@ sysadmin/                          ← публичный репо (этот). �
 │                                     (включается один раз: git config core.hooksPath .githooks)
 ├── scripts/                       ← линтеры и валидаторы мозга (прогон вручную и из pre-commit)
 │   ├── validate-knowledge.py      ← целостность базы знаний: frontmatter, слои, ссылки, сироты
-│   ├── check-shell-portability.sh ← inline-код скиллов не должен ломаться в zsh (ADR-0028)
-│   ├── test-shell-portability.sh  ← тест этого линтера: 61 проверка, данные из истории git
+│   ├── check-shell-portability.sh ← inline-код скиллов не должен ломаться в zsh (ADR-0028);
+│                                     правило 16 — страховка кода возврата в живой подстановке (ADR-0029)
+│   ├── test-shell-portability.sh  ← тест этого линтера: 64 проверки, данные из истории git
+│   ├── test-host-digest.sh        ← тест переходника host-digest: отказы, сторож времени,
+│                                     маскировка секретов (ADR-0030)
 │   └── run-evals.sh               ← прогон evals/triggers.md по скиллам
 ├── docs/archive/                  ← исторические артефакты (docs/archive/README.md)
 │
