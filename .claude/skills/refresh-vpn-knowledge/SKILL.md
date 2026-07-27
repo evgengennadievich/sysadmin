@@ -89,7 +89,7 @@ allowed-tools: Bash, Read, Edit, Write, WebSearch, WebFetch
 
 **Снимок просроченного, снятый при загрузке скилла** (домен `vpn`, ADR-0029):
 
-!`r=$(git rev-parse --show-toplevel 2>/dev/null); s="$r/.claude/skills/_lib/check-knowledge-freshness.sh"; if [ -f "$s" ]; then echo "[снято $(date "+%Y-%m-%d %H:%M")]"; bash "$s" vpn --stale-only 2>&1 || true; else echo "НЕ СОБРАНО: helper не найден — прогоняю Шаг 0 скриптом ниже"; fi || true`
+!`r=$(git rev-parse --show-toplevel 2>/dev/null); s="$r/.claude/skills/_lib/check-knowledge-freshness.sh"; if [ -n "$r" ] && [ -f "$s" ]; then echo "[снято $(date "+%Y-%m-%d %H:%M")]"; bash "$s" vpn --stale-only 2>&1 || true; else echo "НЕ СОБРАНО: helper не найден — прогоняю Шаг 0 скриптом ниже"; fi || true`
 
 **Как этим пользоваться:**
 - `MODE=check` — ответ уже в снимке выше, слой отбираю глазами по пути (`_live/`,

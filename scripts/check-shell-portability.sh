@@ -86,6 +86,47 @@ RULES=(
 SUBST_GUARD_RE='(\|\||;)[[:space:]]*(true|:)[[:space:]]*$'
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Применение всех правил к одной строке. Вынесено в функцию, потому что строки
+# приходят из ДВУХ мест: построчного прохода по ```bash-блокам и отдельного прохода
+# по исполняемым блокам ```! (их границы построчной логикой не описываются, см. ниже).
+# Аргументы: относительный путь, номер строки, сама строка.
+# ─────────────────────────────────────────────────────────────────────────────
+apply_rules() {
+    local rel="$1" ln="$2" ln_text="$3"
+    local trimmed_l unquoted_l _q rule re rest name why fix scope subject
+    trimmed_l="${ln_text#"${ln_text%%[![:space:]]*}"}"
+
+    unquoted_l="$ln_text"
+    case "$ln_text" in
+        *[\"\']*)
+            unquoted_l="$(printf '%s' "$ln_text" | sed -E "s/'[^']*'/''/g; s/\"[^\"]*\"/\"\"/g")"
+            _q="${unquoted_l//[!\"]/}"
+            [ $(( ${#_q} % 2 )) -eq 0 ] || unquoted_l="$ln_text"
+            ;;
+    esac
+
+    for rule in "${RULES[@]}"; do
+        re="${rule%%@@*}"
+        rest="${rule#*@@}"
+        name="${rest%%@@*}"
+        rest="${rest#*@@}"
+        why="${rest%%@@*}"
+        rest="${rest#*@@}"
+        fix="${rest%%@@*}"
+        scope="${rest#*@@}"
+        [ "$scope" = "$fix" ] && scope="raw"
+        if [ "$scope" = "unquoted" ]; then subject="$unquoted_l"; else subject="$ln_text"; fi
+        if [[ "$subject" =~ $re ]]; then
+            printf '❌ %s:%s — %s\n' "$rel" "$ln" "$name" >&2
+            printf '   %s\n' "$trimmed_l" >&2
+            printf '   почему: %s\n' "$why" >&2
+            printf '   как чинить: %s\n\n' "$fix" >&2
+            TOTAL_HITS=$((TOTAL_HITS + 1))
+        fi
+    done
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Сбор файлов: markdown скиллов и персоны.
 # ─────────────────────────────────────────────────────────────────────────────
 if [ "${#FILES[@]}" -eq 0 ]; then
@@ -110,6 +151,49 @@ for file in "${FILES[@]}"; do
     case "$file" in *.md) ;; *) continue ;; esac
     SCANNED=$((SCANNED + 1))
 
+    # ── Исполняемые блоки ```! — отдельным проходом по ВСЕМУ файлу ──────────────
+    # Регулярка клиента: /```!\s*\n?([\s\S]*?)\n?```/g — она НЕ привязана к началу
+    # строки и НЕ требует перевода строки. Значит исполняются и `текст ```!` посреди
+    # строки, и однострочный ```!команда```. Построчная логика этого не описывает:
+    # проверщик 27.07.2026 воспроизвёл оба обхода против регулярки самого клиента.
+    # Поэтому блоки ищем по содержимому файла целиком, ровно как их находит клиент.
+    file_text="$(cat "$file")"
+    blk_rest="$file_text"
+    blk_offset=0        # сколько строк файла уже съедено предыдущими блоками
+    while [ -n "$blk_rest" ]; do
+        case "$blk_rest" in *'```!'*) ;; *) break ;; esac
+        blk_prefix="${blk_rest%%'```!'*}"
+        blk_after="${blk_rest#*'```!'}"
+        case "$blk_after" in *'```'*) ;; *) break ;; esac   # незакрытый блок клиент не берёт
+        blk_body="${blk_after%%'```'*}"
+        blk_nl_prefix=$(printf '%s' "$blk_prefix" | tr -cd '\n' | wc -c | tr -d ' ')
+        blk_line=$(( blk_offset + blk_nl_prefix + 1 ))
+        rel_f="${file#"$ROOT"/}"
+
+        blk_last=""
+        blk_n=0
+        while IFS= read -r blk_l || [ -n "$blk_l" ]; do
+            blk_n=$((blk_n + 1))
+            blk_t="${blk_l#"${blk_l%%[![:space:]]*}"}"
+            [ -n "$blk_t" ] || continue
+            case "$blk_t" in '#'*) continue ;; esac
+            apply_rules "$rel_f" "$((blk_line + blk_n - 1))" "$blk_l"
+            blk_last="$blk_t"
+        done <<BLOCKBODY
+$blk_body
+BLOCKBODY
+
+        if [ -n "$blk_last" ] && ! [[ "$blk_last" =~ $SUBST_GUARD_RE ]]; then
+            printf '❌ %s:%s — блок ```! без страховки кода возврата\n' "$rel_f" "$blk_line" >&2
+            printf '   последняя строка блока: %s\n' "$blk_last" >&2
+            printf '   почему: ненулевой код исполняемого блока молча убивает ВЕСЬ ответ агента\n' >&2
+            printf '   как чинить: закрыть последнюю строку блока: … || true\n\n' >&2
+            TOTAL_HITS=$((TOTAL_HITS + 1))
+        fi
+        blk_offset=$(( blk_offset + blk_nl_prefix + $(printf '%s' "$blk_body" | tr -cd '\n' | wc -c | tr -d ' ') ))
+        blk_rest="${blk_after#*'```'}"
+    done
+
     # Идём построчно, отслеживая границы ```-блоков. Проверяем ТОЛЬКО shell-блоки
     # (```bash / ```sh / ```shell) — в ```json, ```nginx, ```cron ловить нечего.
     in_block=0
@@ -130,21 +214,11 @@ for file in "${FILES[@]}"; do
                 if [ "$in_block" -eq 1 ]; then
                     # Закрытие shell-exec блока: страховка обязана стоять на его
                     # последней содержательной строке — код блока уходит наружу целиком.
-                    if [ "$in_exec_block" -eq 1 ] && [ -n "$exec_last" ]; then
-                        if ! [[ "$exec_last" =~ $SUBST_GUARD_RE ]]; then
-                            rel="${file#"$ROOT"/}"
-                            printf '❌ %s:%s — блок ```! без страховки кода возврата\n' "$rel" "$exec_start" >&2
-                            printf '   последняя строка блока: %s\n' "$exec_last" >&2
-                            printf '   почему: ненулевой код исполняемого блока молча убивает ВЕСЬ ответ агента\n' >&2
-                            printf '   как чинить: закрыть последнюю строку блока: … || true\n\n' >&2
-                            TOTAL_HITS=$((TOTAL_HITS + 1))
-                        fi
-                    fi
-                    in_block=0; in_exec_block=0; exec_last=""; heredoc_end=""
+                    in_block=0; heredoc_end=""
                 else
                     lang="$(printf '%s' "$trimmed" | sed -E 's/^(```|~~~)[[:space:]]*//' | tr 'A-Z' 'a-z')"
                     case "$lang" in
-                        '!'*)     in_block=1; in_exec_block=1; exec_last=""; exec_start="$lineno" ;;
+                        '!'*)     in_block=0 ;;   # разобран отдельным проходом выше
                         bash*|sh|shell*|zsh*) in_block=1 ;;
                         *) in_block=0 ;;
                     esac
@@ -191,11 +265,6 @@ for file in "${FILES[@]}"; do
             rest="${rest#*\`}"
             rest="${rest#*\`}"
         done
-
-        # Тело исполняемого блока — запоминаем последнюю содержательную строку.
-        if [ "$in_exec_block" -eq 1 ] && [ -n "$trimmed" ]; then
-            case "$trimmed" in '#'*) ;; *) exec_last="$trimmed" ;; esac
-        fi
 
         [ "$in_block" -eq 1 ] || [ "$is_subst" -eq 1 ] || continue
 
@@ -248,41 +317,7 @@ for file in "${FILES[@]}"; do
         # разных одинарных выражений (`sed 's/"/x/' a; cd $DIRS && sed 's/"/y/' b`)
         # склеиваются в мнимую пару, и всё между ними — включая реальный дефект —
         # тихо исчезает из проверки.
-        unquoted="$line"
-        case "$line" in
-            *[\"\']*)
-                unquoted="$(printf '%s' "$line" | sed -E "s/'[^']*'/''/g; s/\"[^\"]*\"/\"\"/g")"
-                # Нечётное число двойных кавычек после вырезания = разорванная пара.
-                # Доверять такому «вычищенному» виду нельзя — проверяем сырую строку.
-                _q="${unquoted//[!\"]/}"
-                [ $(( ${#_q} % 2 )) -eq 0 ] || unquoted="$line"
-                ;;
-        esac
-
-        for rule in "${RULES[@]}"; do
-            re="${rule%%@@*}"
-            rest="${rule#*@@}"
-            name="${rest%%@@*}"
-            rest="${rest#*@@}"
-            why="${rest%%@@*}"
-            rest="${rest#*@@}"
-            fix="${rest%%@@*}"
-            scope="${rest#*@@}"
-            [ "$scope" = "$fix" ] && scope="raw"
-
-            if [ "$scope" = "unquoted" ]; then subject="$unquoted"; else subject="$line"; fi
-
-            # Встроенное сопоставление вместо внешнего grep: тот же ERE, но без
-            # подпроцесса на каждое правило и каждую строку (15 × число строк).
-            if [[ "$subject" =~ $re ]]; then
-                rel="${file#"$ROOT"/}"
-                printf '❌ %s:%s — %s\n' "$rel" "$lineno" "$name" >&2
-                printf '   %s\n' "$trimmed" >&2
-                printf '   почему: %s\n' "$why" >&2
-                printf '   как чинить: %s\n\n' "$fix" >&2
-                TOTAL_HITS=$((TOTAL_HITS + 1))
-            fi
-        done
+        apply_rules "${file#"$ROOT"/}" "$lineno" "$line"
     done < "$file"
 done
 

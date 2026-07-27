@@ -128,8 +128,17 @@ if [ -f "$SELF_DIR/redact.sh" ]; then
 fi
 mask() { if command -v redact_stream >/dev/null 2>&1; then redact_stream; else cat; fi; }
 
+# Запускаем команду в СОБСТВЕННОЙ группе процессов (`set -m` включает управление
+# заданиями, и фоновое задание получает свой pgid). Иначе добить её потомков нельзя:
+# игнорирование сигнала НАСЛЕДУЕТСЯ детьми через fork, `pkill -P` шлёт им TERM, они его
+# игнорируют, родителя через паузу убивает KILL — и дети переусыновляются к init, после
+# чего `pkill -P` уже никого не находит. Проверщик 27.07.2026 воспроизвёл это на штатной
+# фикстуре теста: после выхода скрипта оставался `sleep` с PPID 1. Убийство ГРУППЫ
+# (отрицательный PID) достаёт и переусыновлённых.
+set -m
 eval "$DIGEST_CMD" >"$OUT_FILE" 2>"$ERR_FILE" &
 CMD_PID=$!
+set +m
 (
     sleep "$TMO"
     # Проверяем, жива ли ещё команда, ПРЕЖДЕ чем объявлять таймаут. Без этой проверки
@@ -138,20 +147,20 @@ CMD_PID=$!
     # мгновенно. Тест поймал это сразу: `printf` объявлялся «не уложившимся в 5 с».
     kill -0 "$CMD_PID" 2>/dev/null || exit 0
     printf 'timeout\n' > "$TMO_MARK"
-    kill -TERM "$CMD_PID" 2>/dev/null
-    pkill -P "$CMD_PID" 2>/dev/null
+    kill -TERM -"$CMD_PID" 2>/dev/null || kill -TERM "$CMD_PID" 2>/dev/null
     sleep 2
-    kill -KILL "$CMD_PID" 2>/dev/null
-    pkill -9 -P "$CMD_PID" 2>/dev/null
+    kill -KILL -"$CMD_PID" 2>/dev/null || kill -KILL "$CMD_PID" 2>/dev/null
 ) >/dev/null 2>&1 &
 WATCH_PID=$!
 wait "$CMD_PID" 2>/dev/null
 RC=$?
 # Сторожа и его собственный sleep снимаем оба: иначе на каждую загрузку скилла
 # оставался жить лишний процесс на весь лимит («после себя убираю», §3.10).
-pkill -P "$WATCH_PID" 2>/dev/null
 kill "$WATCH_PID" 2>/dev/null
+pkill -P "$WATCH_PID" 2>/dev/null
 wait "$WATCH_PID" 2>/dev/null
+# Подстраховка: если команда всё-таки пережила сторожа, группу добиваем здесь.
+kill -KILL -"$CMD_PID" 2>/dev/null
 
 FETCHED="$(date '+%Y-%m-%d %H:%M')"
 

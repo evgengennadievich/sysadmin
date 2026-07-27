@@ -138,14 +138,32 @@ case "$out" in
     *) bad "оборванный вывод отдан как дайджест: $out" ;;
 esac
 
-# 7.2 Осиротевшие процессы: сторож не должен переживать собственный вызов.
-before=$(pgrep -c sleep 2>/dev/null || echo 0)
-cfg="$(make_config quick.json "echo быстро")"
-bash "$SUT" --config "$cfg" --timeout 25 >/dev/null 2>&1
+# 7.2 Осиротевшие процессы. ПЕРВАЯ редакция этой проверки была фикцией: она запускала
+# `echo` с лимитом 25 с — сторож не срабатывал вовсе, и считать было нечего. Проверщик
+# 27.07.2026 показал, что при этом реальная сирота существовала: команда, игнорирующая
+# TERM, передаёт игнорирование детям по наследству, родителя добивает KILL, а дети
+# переусыновляются к init — и `pkill -P` их уже не находит. Лечение — своя группа
+# процессов и убийство группы. Проверяем именно тот случай, который ломался,
+# и по УНИКАЛЬНОМУ маркеру, а не по общему числу `sleep` в системе.
+MARK="host-digest-orphan-probe-$$"
+cfg="$(make_config orphan.json "trap '' TERM; sleep 37 # $MARK")"
+before=$(pgrep -f "$MARK" 2>/dev/null | wc -l | tr -d ' ')
+bash "$SUT" --config "$cfg" --timeout 2 >/dev/null 2>&1
 sleep 1
-after=$(pgrep -c sleep 2>/dev/null || echo 0)
-if [ "$after" -le "$before" ]; then ok "сирот не осталось (sleep: $before → $after)"
-else bad "остались осиротевшие процессы (sleep: $before → $after)"; fi
+after=$(pgrep -f "$MARK" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$after" -le "$before" ]; then ok "сирот не осталось после добивания группы (было $before, стало $after)"
+else bad "осталось осиротевших процессов: $after (было $before)"; fi
+pkill -9 -f "$MARK" 2>/dev/null
+
+# 7.2б Тот же вопрос для команды с ФОНОВЫМ ребёнком: он переживает родителя иначе.
+MARK2="host-digest-child-probe-$$"
+cfg="$(make_config orphan2.json "sleep 39 # $MARK2 & wait")"
+bash "$SUT" --config "$cfg" --timeout 2 >/dev/null 2>&1
+sleep 1
+left=$(pgrep -f "$MARK2" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$left" -eq 0 ]; then ok "фоновый ребёнок команды тоже добит"
+else bad "фоновый ребёнок пережил сторожа: $left процессов"; fi
+pkill -9 -f "$MARK2" 2>/dev/null
 
 # 7.3 Утечка секрета в ветке ОШИБКИ: маскировка обязана работать и там.
 # Было: redact.sh подключался ПОСЛЕ этой ветки, диагностика уезжала сырой.
