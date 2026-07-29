@@ -182,6 +182,23 @@ for foreign in github.com pypi.org www.cloudflare.com api.de.nurcloud.org; do
 done
 echo
 
+# ---------------------------------------------------------------------------
+echo "[10] проверка, потерявшая источник данных, не исчезает из отчёта молча"
+RC=$(STUB_SUDO=allow STUB_SSHD=missing run_audit t12 --scope host)
+expect_row t12 "SSH: интерактивная аутентификация" UNKNOWN \
+    "без sshd -T значение недоступно; прежде строка просто пропадала из отчёта — проверка отсутствовала бесшумно"
+expect_row t12 "SSH: вход по паролю" UNKNOWN \
+    "запасной путь (чтение файлов) на этой машине тоже ничего не даёт"
+echo
+
+# ---------------------------------------------------------------------------
+echo "[11] ошибки вызова заметны, справка есть"
+PATH="$STUB_BIN:$PATH" bash "$SCRIPT" --server stub@test --scope hosts >/dev/null 2>&1
+expect_rc "$?" 2 "опечатка в --scope прежде давала пустой отчёт с кодом успеха"
+PATH="$STUB_BIN:$PATH" bash "$SCRIPT" --help >/dev/null 2>&1
+expect_rc "$?" 0 "--help должен работать без --server и без сервера"
+echo
+
 echo "─────────────────────────────────────────"
 if [ "$FAILED" -eq 0 ]; then
     echo "PASS — все проверки прошли ($TOTAL)"

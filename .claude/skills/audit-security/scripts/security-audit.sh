@@ -38,9 +38,42 @@ while [ $# -gt 0 ]; do
         --env-paths) ENV_PATHS="$2"; shift 2 ;;
         --repo-path) REPO_PATH="$2"; shift 2 ;;
         --output) OUTPUT="$2"; shift 2 ;;
+        -h|--help) SHOW_HELP=1; shift ;;
         *) echo "Неизвестный аргумент: $1"; exit 2 ;;
     esac
 done
+
+usage() {
+    cat <<'USAGE'
+security-audit.sh — security-аудит сервера по чек-листу. Read-only.
+
+  --server user@host      обязательный. SSH-таргет
+  --scope host|docker|git|tls|all      что проверять (по умолчанию all)
+  --domains-file FILE     inventory/hosts/<host>/domains.md — домены для TLS.
+                          Берутся из таблицы/списка, не из прозы
+  --env-paths "П1 П2"     где искать .env (по умолчанию "/srv/apps /opt /srv /home")
+  --repo-path DIR         git-репозиторий для gitleaks (по умолчанию текущий)
+  --output FILE           куда положить отчёт
+  -h, --help              эта справка
+
+Статусы: PASS, WARN, FAIL, UNKNOWN («проверить не удалось» — НЕ «всё хорошо»),
+INFO (справка, в зачёт не идёт).
+
+Коды возврата: 0 — чисто; 1 — есть FAIL; 3 — FAIL нет, но часть проверок не
+выполнена; 2 — ошибка вызова.
+USAGE
+}
+
+if [ "${SHOW_HELP:-0}" = "1" ]; then
+    usage
+    exit 0
+fi
+
+# Опечатка в --scope не должна оборачиваться пустым отчётом с кодом «успех».
+case "$SCOPE" in
+    host|docker|git|tls|all) ;;
+    *) echo "Неизвестный scope: $SCOPE (ожидается host|docker|git|tls|all)" >&2; exit 2 ;;
+esac
 
 if [ -z "$SERVER" ]; then
     echo "Использование: $0 --server user@host [--scope host|docker|git|tls|all]"
@@ -95,8 +128,10 @@ add_recommendation() {
 # rexec CMD           — выполнить на сервере как есть
 # rexec_root CMD      — выполнить с sudo -n (без пароля); при отказе вернуть 127
 #
-# Обе печатают stdout команды; КОД ВОЗВРАТА значим — по нему отличаем
-# «команда отработала и ничего не нашла» от «команда не отработала».
+# Обе печатают stdout команды. Напрямую их вызывать НЕ НУЖНО: признак
+# «команда отработала» даёт probe/probe_root ниже, а кода возврата для этого
+# недостаточно (см. блок про маркер). Прямые вызовы остались только там, где
+# ответ не нужен вовсе — предполётная проверка связи и наличия sudo.
 rexec() {
     ssh -o ConnectTimeout=15 -o BatchMode=yes "$SERVER" "$1" 2>/dev/null
 }
@@ -152,6 +187,41 @@ ok_upto() {
     printf "sh -c '%s; __rc=\$?; [ \$__rc -le %s ] && echo %s'" "$CMD" "$RC_MAX" "$RUN_MARK"
 }
 
+# --- probe: единственный способ спросить сервер ----------------------------
+# Разбор маркера вынесен сюда СПЕЦИАЛЬНО. Пока каждая проверка сама решала,
+# доверять ли пустому выводу, принцип «три исхода» держался на внимательности
+# автора — и дважды не удержался: сначала в правах .env, потом в группе docker.
+# Теперь забыть про UNKNOWN технически трудно: probe всегда возвращает ДВА
+# значения, и «выполнилось ли» приходится прочитать, чтобы получить вывод.
+#
+#   probe      RC_MAX CMD  — от обычного пользователя
+#   probe_root RC_MAX CMD  — под sudo
+#
+# После вызова:
+#   $PROBE_OK  = yes|no  — состоялась ли проверка
+#   $PROBE_OUT           — вывод (пуст, если не состоялась)
+#
+# RC_MAX — наибольший код возврата, который для ЭТОЙ команды означает «ответ»,
+# а не «сбой»: grep — 1 (нет совпадений), getent — 2 (записи нет),
+# systemctl is-active — 3 (служба не активна).
+PROBE_OUT=""
+PROBE_OK="no"
+
+_probe_run() {
+    local TRANSPORT="$1" RC_MAX="$2" CMD="$3" RAW
+    RAW=$("$TRANSPORT" "$(ok_upto "$RC_MAX" "$CMD")")
+    if has_mark "$RAW"; then
+        PROBE_OK="yes"
+        PROBE_OUT=$(strip_mark "$RAW")
+    else
+        PROBE_OK="no"
+        PROBE_OUT=""
+    fi
+}
+
+probe()      { _probe_run rexec      "$1" "$2"; }
+probe_root() { _probe_run rexec_root "$1" "$2"; }
+
 # --- Предполётная проверка транспорта --------------------------------------
 echo "[init] Проверка доступа..."
 if ! rexec "true"; then
@@ -180,9 +250,11 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
     # script» и выходит с кодом 0. Старая версия скрипта не находила в этом
     # выводе «Status: active» и рапортовала FAIL «UFW неактивен» на сервере с
     # полностью рабочим firewall. Отличаем отказ в правах от реального ответа.
-    UFW_OUT=$(rexec_root "ufw status verbose")
-    UFW_RC=$?
-    if [ $UFW_RC -ne 0 ] || [ -z "$UFW_OUT" ] || echo "$UFW_OUT" | grep -qi "need to be root"; then
+    probe_root 0 "ufw status verbose"
+    UFW_OK="$PROBE_OK"; UFW_OUT="$PROBE_OUT"
+    # Отдельный случай: ufw отвечает отказом в правах, но выходит с кодом 0 —
+    # то есть маркер будет, а содержательного ответа нет. Ловим по тексту.
+    if [ "$UFW_OK" = "no" ] || [ -z "$UFW_OUT" ] || echo "$UFW_OUT" | grep -qi "need to be root"; then
         add_result host UNKNOWN "UFW активен" "нет прав root — проверка не выполнена (не путать с «firewall выключен»)"
         add_recommendation "[UNKNOWN] Статус UFW не проверен: нужен sudo. Проверь вручную: \`sudo ufw status verbose\`"
     elif echo "$UFW_OUT" | grep -q "Status: active"; then
@@ -201,7 +273,7 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
     # Показываем правила как есть, не пытаясь угадать «лишние»: на реальном
     # сервере легитимными бывают и панель на нестандартном порту, и доступ из
     # docker-подсетей. Решение о нужности правила — за человеком.
-    if [ $UFW_RC -eq 0 ] && [ -n "$UFW_OUT" ] && ! echo "$UFW_OUT" | grep -qi "need to be root"; then
+    if [ "$UFW_OK" = "yes" ] && [ -n "$UFW_OUT" ] && ! echo "$UFW_OUT" | grep -qi "need to be root"; then
         ALLOW_RULES=$(echo "$UFW_OUT" | grep "ALLOW IN" | grep -vE "\(v6\)" | awk '{print $1}' | tr '\n' ' ')
         # INFO, а не PASS: это перечень, а не проверка — у него нет исхода
         # «хорошо/плохо», и в зачёт пройденных он идти не должен.
@@ -214,9 +286,9 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
     # `sshd -T` показывает то, что реально применено, с учётом sshd_config.d/*
     # и Match-блоков. Чтение одного sshd_config врёт, когда настройка
     # переопределена в другом файле (типовой случай на облачных образах).
-    SSHD_EFFECTIVE=$(rexec_root "sshd -T")
-    SSHD_RC=$?
-    if [ $SSHD_RC -eq 0 ] && [ -n "$SSHD_EFFECTIVE" ]; then
+    probe_root 0 "sshd -T"
+    SSHD_EFFECTIVE="$PROBE_OUT"
+    if [ "$PROBE_OK" = "yes" ] && [ -n "$SSHD_EFFECTIVE" ]; then
         SSH_PWD=$(echo "$SSHD_EFFECTIVE" | grep -E "^passwordauthentication " | awk '{print $2}')
         SSH_ROOT=$(echo "$SSHD_EFFECTIVE" | grep -E "^permitrootlogin " | awk '{print $2}')
         SSH_KBD=$(echo "$SSHD_EFFECTIVE" | grep -E "^kbdinteractiveauthentication " | awk '{print $2}')
@@ -247,7 +319,13 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
         add_recommendation "[WARN] SSH PermitRootLogin не ограничен — \`prohibit-password\` или \`no\` (Yellow Zone)"
     fi
 
-    if [ -n "$SSH_KBD" ] && ! echo "$SSH_KBD" | grep -qi "^no$"; then
+    if [ -z "$SSH_KBD" ]; then
+        # Запасной путь (чтение файлов) это значение не даёт. Раньше проверка
+        # тут просто исчезала из отчёта — то есть отсутствовала бесшумно.
+        add_result host UNKNOWN "SSH: интерактивная аутентификация" "не определено (нужен sshd -T)"
+    elif echo "$SSH_KBD" | grep -qi "^no$"; then
+        add_result host PASS "SSH: интерактивная аутентификация" "no ($SRC)"
+    else
         add_result host WARN "SSH: интерактивная аутентификация" "$SSH_KBD — обходной путь для паролей"
         add_recommendation "[WARN] kbdinteractiveauthentication включён — это второй путь входа по паролю мимо PasswordAuthentication"
     fi
@@ -257,9 +335,9 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
     # это ответ, а не сбой. Прежняя версия смотрела только на текст вывода, и
     # пустая строка (обрыв SSH, systemctl не ответил) давала FAIL «не запущен».
     # Зеркало исходного дефекта: пустой вывод снова читался как результат.
-    F2B_RAW=$(rexec "$(ok_upto 3 'systemctl is-active fail2ban')")
-    F2B_ACTIVE=$(strip_mark "$F2B_RAW")
-    if ! has_mark "$F2B_RAW"; then
+    probe 3 "systemctl is-active fail2ban"
+    F2B_ACTIVE="$PROBE_OUT"
+    if [ "$PROBE_OK" = "no" ]; then
         add_result host UNKNOWN "fail2ban" "systemctl не ответил — состояние службы не определено"
         add_recommendation "[UNKNOWN] Состояние fail2ban не проверено. Проверь вручную: \`systemctl is-active fail2ban\`"
     elif [ "$F2B_ACTIVE" != "active" ]; then
@@ -267,15 +345,16 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
         add_recommendation "[FAIL] fail2ban не запущен — \`apt install fail2ban && systemctl enable --now fail2ban\` (Yellow Zone)"
     else
         # fail2ban-client требует root. Без него — UNKNOWN, а не «jail отсутствует».
-        F2B_JAILS=$(rexec_root "fail2ban-client status")
-        F2B_RC=$?
-        if [ $F2B_RC -ne 0 ] || [ -z "$F2B_JAILS" ]; then
+        probe_root 0 "fail2ban-client status"
+        F2B_JAILS="$PROBE_OUT"
+        if [ "$PROBE_OK" = "no" ] || [ -z "$F2B_JAILS" ]; then
             add_result host UNKNOWN "fail2ban: состав jail" "служба активна, но список jail требует root"
             add_recommendation "[UNKNOWN] Список jail fail2ban не прочитан (нужен sudo). Проверь: \`sudo fail2ban-client status\`"
         else
             JAIL_LIST=$(echo "$F2B_JAILS" | grep "Jail list" | cut -d: -f2 | tr -d '\t' | sed 's/^ *//')
             if echo "$JAIL_LIST" | grep -q "sshd"; then
-                SSHD_STAT=$(rexec_root "fail2ban-client status sshd")
+                probe_root 0 "fail2ban-client status sshd"
+                SSHD_STAT="$PROBE_OUT"
                 BANNED_NOW=$(echo "$SSHD_STAT" | grep "Currently banned" | awk '{print $NF}')
                 BANNED_TOTAL=$(echo "$SSHD_STAT" | grep "Total banned" | awk '{print $NF}')
                 add_result host PASS "fail2ban: sshd jail" "активен; в бане сейчас ${BANNED_NOW:-?}, всего забанено ${BANNED_TOTAL:-?}. Jail list: $JAIL_LIST"
@@ -287,10 +366,24 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
     fi
 
     # --- unattended-upgrades ---
-    if rexec "test -f /etc/apt/apt.conf.d/50unattended-upgrades"; then
-        UU_REBOOT=$(rexec "grep -E '^[^/]*Unattended-Upgrade::Automatic-Reboot ' /etc/apt/apt.conf.d/50unattended-upgrades")
-        UU_PERIODIC=$(rexec "grep -c 'Unattended-Upgrade \"1\"' /etc/apt/apt.conf.d/20auto-upgrades")
-        if [ "${UU_PERIODIC:-0}" -eq 0 ]; then
+    probe 1 "test -f /etc/apt/apt.conf.d/50unattended-upgrades && echo PRESENT"
+    UU_PRESENT="$PROBE_OK:$PROBE_OUT"
+    if [ "$UU_PRESENT" = "no:" ]; then
+        add_result host UNKNOWN "unattended-upgrades" "не удалось проверить наличие настроек"
+    elif [ "$PROBE_OUT" = "PRESENT" ]; then
+        # Кавычки обязательны: без них оболочка сервера примет [^/]* за шаблон
+        # имени файла. Внутри обёртки ok_upto двойные кавычки допустимы —
+        # запрещены только одинарные.
+        probe 1 "grep -E \"^[^/]*Unattended-Upgrade::Automatic-Reboot \" /etc/apt/apt.conf.d/50unattended-upgrades"
+        UU_REBOOT="$PROBE_OUT"
+        # Шаблон без литеральных кавычек — строка выглядит как
+        # `APT::Periodic::Unattended-Upgrade "1";`, и [^0-9]*1 ловит её, не
+        # требуя экранирования кавычек через два уровня оболочек.
+        probe 2 "grep -cE \"Unattended-Upgrade[^0-9]*1\" /etc/apt/apt.conf.d/20auto-upgrades"
+        UU_PERIODIC="$PROBE_OUT"
+        if [ "$PROBE_OK" = "no" ]; then
+            add_result host UNKNOWN "unattended-upgrades" "файл настроек есть, но 20auto-upgrades не прочитан"
+        elif [ "${UU_PERIODIC:-0}" -eq 0 ]; then
             add_result host WARN "unattended-upgrades" "файл настроек есть, но автозапуск не включён (20auto-upgrades)"
             add_recommendation "[WARN] unattended-upgrades настроен, но не запускается — проверь APT::Periodic::Unattended-Upgrade в /etc/apt/apt.conf.d/20auto-upgrades"
         elif echo "$UU_REBOOT" | grep -q '"false"'; then
@@ -313,9 +406,9 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
     # Прежняя версия считала любой ненулевой код за «не прочитано», из-за чего
     # ветка PASS ниже была НЕДОСТИЖИМА: лучший исход системы показывался как
     # UNKNOWN. Теперь признак выполнения — маркер, а не код возврата.
-    SUDO_RAW=$(rexec_root "$(ok_upto 1 'grep -rhE NOPASSWD /etc/sudoers /etc/sudoers.d/ 2>/dev/null')")
-    SUDO_RULES=$(strip_mark "$SUDO_RAW")
-    if ! has_mark "$SUDO_RAW"; then
+    probe_root 1 "grep -rhE NOPASSWD /etc/sudoers /etc/sudoers.d/ 2>/dev/null"
+    SUDO_RULES="$PROBE_OUT"
+    if [ "$PROBE_OK" = "no" ]; then
         add_result host UNKNOWN "sudo: правила NOPASSWD" "не прочитаны (нужен root)"
         add_recommendation "[UNKNOWN] Правила sudo NOPASSWD не прочитаны. Проверь вручную: \`sudo grep -rhE NOPASSWD /etc/sudoers /etc/sudoers.d/\`"
     elif [ -z "$SUDO_RULES" ]; then
@@ -336,10 +429,10 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
     # несуществующая группа давали пустой вывод с кодом 0 — и проверка писала
     # PASS «прямого пути к root через Docker нет». Разбор строки перенесён на
     # свою сторону, признак выполнения — маркер.
-    DOCKER_RAW=$(rexec "$(ok_upto 2 'getent group docker')")
-    DOCKER_LINE=$(strip_mark "$DOCKER_RAW")
+    probe 2 "getent group docker"
+    DOCKER_LINE="$PROBE_OUT"
     DOCKER_MEMBERS=$(printf '%s' "$DOCKER_LINE" | cut -d: -f4)
-    if ! has_mark "$DOCKER_RAW"; then
+    if [ "$PROBE_OK" = "no" ]; then
         add_result host UNKNOWN "Группа docker" "состав группы не прочитан — getent не отработал"
         add_recommendation "[UNKNOWN] Состав группы docker не проверен. Это важно: член группы docker получает root без sudo. Проверь вручную: \`getent group docker\`"
     elif [ -z "$DOCKER_LINE" ]; then
@@ -356,13 +449,14 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
     # --- Слушающие сокеты ---
     # ss без root не показывает процессы (-p), но сами сокеты видны. Отличаем
     # «ничего не слушает наружу» от «ss не отработал».
-    SS_OUT=$(rexec_root "ss -tlnp")
-    SS_RC=$?
-    if [ $SS_RC -ne 0 ] || [ -z "$SS_OUT" ]; then
-        SS_OUT=$(rexec "ss -tln")
-        SS_RC=$?
+    probe_root 0 "ss -tlnp"
+    SS_OUT="$PROBE_OUT"
+    if [ "$PROBE_OK" = "no" ] || [ -z "$SS_OUT" ]; then
+        # Без root ss не покажет процессы (-p), но сами сокеты видны.
+        probe 0 "ss -tln"
+        SS_OUT="$PROBE_OUT"
     fi
-    if [ $SS_RC -ne 0 ] || [ -z "$SS_OUT" ]; then
+    if [ "$PROBE_OK" = "no" ] || [ -z "$SS_OUT" ]; then
         add_result host UNKNOWN "Внешние слушающие порты" "ss не отработал — список портов не получен"
     else
         EXTERNAL=$(echo "$SS_OUT" | awk 'NR>1 && ($4 ~ /^0\.0\.0\.0:/ || $4 ~ /^\*:/ || $4 ~ /^\[::\]:/) {split($4,a,":"); print a[length(a)]}' | sort -un | tr '\n' ' ')
@@ -382,8 +476,14 @@ fi
 if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "docker" ]; then
     echo "[docker] Проверка daemon.json, прав .env..."
 
-    if rexec "test -f /etc/docker/daemon.json"; then
-        if rexec "grep -q 'insecure-registries' /etc/docker/daemon.json"; then
+    probe 1 "test -f /etc/docker/daemon.json && echo PRESENT"
+    if [ "$PROBE_OK" = "no" ]; then
+        add_result docker UNKNOWN "daemon.json" "не удалось проверить наличие файла"
+    elif [ "$PROBE_OUT" = "PRESENT" ]; then
+        probe 1 "grep -q insecure-registries /etc/docker/daemon.json && echo YES"
+        if [ "$PROBE_OK" = "no" ]; then
+            add_result docker UNKNOWN "daemon.json" "файл есть, но прочитать не удалось"
+        elif [ "$PROBE_OUT" = "YES" ]; then
             add_result docker WARN "daemon.json" "содержит insecure-registries"
             add_recommendation "[WARN] Docker daemon.json содержит insecure-registries — если это внутренний registry, задокументируй в inventory/hosts/<host>/server.md"
         else
@@ -407,18 +507,19 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "docker" ]; then
     # съедена оболочкой сервера как разделитель команд — отсюда \\;
     ENV_CMD="find $ENV_PATHS -maxdepth 4 -name .env -type f -exec stat -c \"%a %U:%G %n\" {} \\; 2>/dev/null"
     ENV_SCOPE="root"
-    ENV_RAW=$(rexec_root "$(ok_upto 1 "$ENV_CMD")")
-    if ! has_mark "$ENV_RAW"; then
+    probe_root 1 "$ENV_CMD"
+    if [ "$PROBE_OK" = "no" ]; then
         # Без root — читаем чем есть, но полноту больше не утверждаем.
         ENV_SCOPE="user"
-        ENV_RAW=$(rexec "$(ok_upto 1 "$ENV_CMD")")
+        probe 1 "$ENV_CMD"
     fi
-    ENV_LIST=$(strip_mark "$ENV_RAW")
+    ENV_OK="$PROBE_OK"
+    ENV_LIST="$PROBE_OUT"
     ENV_FOUND=$(printf '%s' "$ENV_LIST" | grep -c . )
     BAD_ENV=$(printf '%s' "$ENV_LIST" | grep -vE '^600 ' | grep . )
     BAD_COUNT=$(printf '%s' "$BAD_ENV" | grep -c . )
 
-    if ! has_mark "$ENV_RAW"; then
+    if [ "$ENV_OK" = "no" ]; then
         add_result docker UNKNOWN "Права .env" "поиск не выполнен (проверялись пути: $ENV_PATHS)"
     elif [ "$BAD_COUNT" -gt 0 ]; then
         # Найденное нарушение — факт независимо от полноты обхода.
@@ -446,9 +547,16 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "git" ]; then
         add_result git UNKNOWN "gitleaks scan" "$REPO_PATH не git-репозиторий — скан не выполнялся"
     elif command -v gitleaks >/dev/null 2>&1; then
         GL_OUT=$(cd "$REPO_PATH" && gitleaks detect --no-banner --log-opts='--all' 2>&1)
-        if [ $? -eq 0 ]; then
+        GL_RC=$?
+        # У gitleaks 1 = найдены утечки. Любой другой ненулевой код — сбой
+        # самого инструмента (неверный флаг, битый репозиторий), и выдавать
+        # его за находку значит поднимать ложную тревогу.
+        if [ $GL_RC -eq 0 ]; then
             SCANNED=$(echo "$GL_OUT" | grep -oE '[0-9]+ commits scanned' | head -1)
             add_result git PASS "gitleaks scan" "утечек нет (${SCANNED:-история просмотрена})"
+        elif [ $GL_RC -ne 1 ]; then
+            add_result git UNKNOWN "gitleaks scan" "gitleaks завершился с кодом $GL_RC — похоже на сбой вызова, а не на находку"
+            add_recommendation "[UNKNOWN] gitleaks вернул код $GL_RC (не 0 и не 1). Скан не состоялся — проверь вручную: \`cd $REPO_PATH && gitleaks detect --log-opts='--all'\`"
         else
             add_result git FAIL "gitleaks scan" "найдены утечки"
             add_recommendation "[FAIL] gitleaks нашёл секреты в $REPO_PATH — детали: \`cd $REPO_PATH && gitleaks detect --log-opts='--all' --report-path leaks.json\`. Исправление: ротировать утёкшие секреты (git-историю переписывать только после ротации — сам по себе filter-repo секрет не отзывает)"
@@ -513,9 +621,9 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "tls" ]; then
             # состояние сервера — этот капкан уже стоил ложного вывода при
             # проверке портов (урок записан в инвентаре 2026-07-27).
             TLS_FROM="сервер"
-            CERT_RAW=$(rexec "$(ok_upto 0 "echo | openssl s_client -connect $domain:443 -servername $domain 2>/dev/null")")
-            if has_mark "$CERT_RAW"; then
-                CERT_RAW=$(strip_mark "$CERT_RAW")
+            probe 0 "echo | openssl s_client -connect $domain:443 -servername $domain 2>/dev/null"
+            if [ "$PROBE_OK" = "yes" ]; then
+                CERT_RAW="$PROBE_OUT"
             else
                 # На сервере нет openssl или он не отработал — отступаем на
                 # локальный прогон, но честно говорим об этом в отчёте.
