@@ -479,17 +479,53 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "tls" ]; then
     echo "[tls] Проверка сертификатов..."
 
     if [ -n "$DOMAINS_FILE" ] && [ -f "$DOMAINS_FILE" ]; then
-        DOMAINS=$(grep -oE '\b[a-z0-9][a-z0-9.-]*\.(ru|com|tech|io|net|org|dev|app|su)\b' "$DOMAINS_FILE" | sort -u)
+        # Домены берутся из СТРУКТУРЫ документа — первой колонки markdown-таблиц
+        # и элементов списка, — а не регуляркой по всему тексту.
+        #
+        # Прежний вариант хватал любое упоминание в прозе: в инвентаре рядом с
+        # рабочими доменами перечислены Reality-заглушка, сайт VPN-провайдера,
+        # pypi.org и github.com. Аудит лез с openssl ко всем и вписывал сроки
+        # ЧУЖИХ сертификатов в отчёт оператора. Это и мусор, и ненужные
+        # соединения с третьими лицами от его имени.
+        #
+        # Ячейка должна быть доменом ЦЕЛИКОМ (якоря ^...$) — тогда пояснительный
+        # текст в той же ячейке не превращается в цель проверки.
+        DOMAINS=$( { grep -E '^\|' "$DOMAINS_FILE" | awk -F'|' '{print $2}'
+                     grep -E '^[-*] ' "$DOMAINS_FILE" | sed -E 's/^[-*] +//'; } 2>/dev/null \
+                   | sed -E 's/`//g; s/^[[:space:]]+//; s/[[:space:]]+$//' \
+                   | grep -oE '^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$' \
+                   | sort -u )
+
+        if [ -z "$DOMAINS" ]; then
+            add_result tls UNKNOWN "TLS-проверки" "в $DOMAINS_FILE не найдено доменов в таблице или списке — проверять нечего"
+            add_recommendation "[UNKNOWN] Домены из $DOMAINS_FILE не распознаны. Ожидается markdown-таблица, где домен стоит первой колонкой, либо список \`- домен\`. Проза не сканируется намеренно — иначе в проверку попадают чужие домены, упомянутые по соседству"
+        else
+            add_result tls INFO "Домены под проверкой" "$(printf '%s' "$DOMAINS" | tr '\n' ' ')"
+        fi
+
         for domain in $DOMAINS; do
             # Разделяем три разных исхода, которые раньше сливались в FAIL:
             #   1) порт не отвечает вовсе        → UNKNOWN (может быть закрыт намеренно)
             #   2) TLS есть, но это не веб       → PASS по сертификату (штатно для VPN-инбаунда)
             #   3) сертификат есть → считаем срок
-            CERT_RAW=$(echo | openssl s_client -connect "$domain:443" -servername "$domain" 2>/dev/null)
+            # Проверяем С СЕРВЕРА, а не с машины оператора. На Маке с включённым
+            # TUN-клиентом VPN результат описывает путь через туннель, а не
+            # состояние сервера — этот капкан уже стоил ложного вывода при
+            # проверке портов (урок записан в инвентаре 2026-07-27).
+            TLS_FROM="сервер"
+            CERT_RAW=$(rexec "$(ok_upto 0 "echo | openssl s_client -connect $domain:443 -servername $domain 2>/dev/null")")
+            if has_mark "$CERT_RAW"; then
+                CERT_RAW=$(strip_mark "$CERT_RAW")
+            else
+                # На сервере нет openssl или он не отработал — отступаем на
+                # локальный прогон, но честно говорим об этом в отчёте.
+                TLS_FROM="рабочая машина оператора"
+                CERT_RAW=$(echo | openssl s_client -connect "$domain:443" -servername "$domain" 2>/dev/null)
+            fi
             EXPIRY=$(echo "$CERT_RAW" | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
 
             if [ -z "$EXPIRY" ]; then
-                add_result tls UNKNOWN "$domain" "порт 443 не отвечает или не отдаёт сертификат — проверь, обслуживается ли домен на этом сервере"
+                add_result tls UNKNOWN "$domain" "порт 443 не отвечает или не отдаёт сертификат (проверялось с: $TLS_FROM)"
                 add_recommendation "[UNKNOWN] $domain: TLS-соединение не установилось. Это не обязательно авария — порт может быть закрыт или занят не-TLS сервисом. Проверь вручную: \`openssl s_client -connect $domain:443\`"
                 continue
             fi
@@ -504,13 +540,13 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "tls" ]; then
             if [ "$EXPIRY_TS" = "0" ]; then
                 add_result tls UNKNOWN "$domain" "сертификат получен, но дату истечения разобрать не удалось: $EXPIRY"
             elif [ "$DAYS" -lt 14 ]; then
-                add_result tls FAIL "$domain" "$EXPIRY ($DAYS дней). $VERIFY"
+                add_result tls FAIL "$domain" "$EXPIRY ($DAYS дней). $VERIFY [проверено с: $TLS_FROM]"
                 add_recommendation "[FAIL] $domain истекает через $DAYS дней — обнови сертификат немедленно (\`acme.sh --renew -d $domain\`) и проверь, что автопродление работает"
             elif [ "$DAYS" -lt 30 ]; then
-                add_result tls WARN "$domain" "$EXPIRY ($DAYS дней). $VERIFY"
+                add_result tls WARN "$domain" "$EXPIRY ($DAYS дней). $VERIFY [проверено с: $TLS_FROM]"
                 add_recommendation "[WARN] $domain истекает через $DAYS дней — автопродление должно сработать, проверь его расписание"
             else
-                add_result tls PASS "$domain" "$EXPIRY ($DAYS дней). $VERIFY"
+                add_result tls PASS "$domain" "$EXPIRY ($DAYS дней). $VERIFY [проверено с: $TLS_FROM]"
             fi
         done
     else

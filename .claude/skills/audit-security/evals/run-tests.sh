@@ -158,6 +158,30 @@ expect_absent t10 "все mode 600" \
     "утверждение о правах при нуле найденных файлов — исходный дефект 2026-07-29"
 echo
 
+# ---------------------------------------------------------------------------
+echo "[9] TLS: в проверку идут только домены из структуры, а не из прозы"
+cat > "$WORK/domains.md" <<'DOC'
+# Домены — фикстура теста
+
+| домен | назначение |
+|-------|------------|
+| korp-podarki.ru | сайт |
+| vpn.korp-podarki.ru | панель |
+
+Reality-заглушка указывает на www.cloudflare.com, upstream живёт на
+api.de.nurcloud.org. Пакеты тянутся с pypi.org, код лежит на github.com.
+DOC
+RC=$(STUB_SUDO=allow run_audit t11 --scope tls --domains-file "$WORK/domains.md")
+expect_row t11 "korp-podarki.ru" UNKNOWN \
+    "домен из таблицы обязан попасть в проверку"
+expect_row t11 "vpn.korp-podarki.ru" UNKNOWN \
+    "второй домен из таблицы тоже"
+for foreign in github.com pypi.org www.cloudflare.com api.de.nurcloud.org; do
+    expect_absent t11 "| $foreign |" \
+        "чужой домен из прозы не должен попадать в проверку: это мусор в отчёте и соединение с третьим лицом от имени оператора"
+done
+echo
+
 echo "─────────────────────────────────────────"
 if [ "$FAILED" -eq 0 ]; then
     echo "PASS — все проверки прошли ($TOTAL)"
