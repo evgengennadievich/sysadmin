@@ -1,0 +1,10 @@
+#!/bin/sh
+if [ "${1:-}" = "status" ] && [ -z "${2:-}" ]; then
+    echo "Status"
+    echo "|- Number of jail:      1"
+    echo "\`- Jail list:   sshd"
+    exit 0
+fi
+echo "Status for the jail: sshd"
+echo "   |- Currently banned: 2"
+echo "   \`- Total banned:     47"

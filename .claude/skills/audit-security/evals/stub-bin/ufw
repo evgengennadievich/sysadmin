@@ -1,0 +1,16 @@
+#!/bin/sh
+# Заглушка ufw. Сценарии — STUB_UFW.
+#   noroot   — ufw отвечает отказом, НО с кодом 0 (реальное поведение)
+#   inactive — firewall выключен
+#   active   — включён, default deny
+case "${STUB_UFW:-active}" in
+    noroot)   echo "ERROR: You need to be root to run this script"; exit 0 ;;
+    inactive) echo "Status: inactive"; exit 0 ;;
+    *)
+        echo "Status: active"
+        echo "Default: deny (incoming), allow (outgoing), disabled (routed)"
+        echo "22/tcp                     ALLOW IN    Anywhere"
+        echo "80/tcp                     ALLOW IN    Anywhere"
+        echo "443/tcp                    ALLOW IN    Anywhere"
+        ;;
+esac

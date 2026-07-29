@@ -1,0 +1,15 @@
+#!/bin/sh
+# Заглушка stat: эмулирует GNU-формат `-c` поверх BSD stat (macOS его не знает).
+# Нужна, чтобы проверку прав .env можно было гонять на машине оператора, а не
+# только на Linux-сервере.
+if command -v gstat >/dev/null 2>&1; then exec gstat "$@"; fi
+if [ "${1:-}" = "-c" ]; then
+    FMT="$2"; shift 2
+    for f in "$@"; do
+        MODE=$(/usr/bin/stat -f '%Lp' "$f" 2>/dev/null) || continue
+        OG=$(/usr/bin/stat -f '%Su:%Sg' "$f" 2>/dev/null)
+        printf '%s\n' "$FMT" | sed -e "s|%a|$MODE|g" -e "s|%U:%G|$OG|g" -e "s|%n|$f|g"
+    done
+    exit 0
+fi
+exec /usr/bin/stat "$@"

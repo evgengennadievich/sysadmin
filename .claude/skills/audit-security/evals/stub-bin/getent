@@ -1,0 +1,13 @@
+#!/bin/sh
+# Заглушка getent. Сценарии задаются через STUB_GETENT.
+#   missing  — утилиты нет в системе (код 127). Классика ложного PASS:
+#              раньше пустой вывод конвейера читался как «группа пуста».
+#   nogroup  — группы docker нет (код 2 — штатный ответ getent)
+#   empty    — группа есть, дополнительных членов нет
+#   members  — в группе есть люди = у них root без sudo
+case "${STUB_GETENT:-members}" in
+    missing) exit 127 ;;
+    nogroup) exit 2 ;;
+    empty)   echo "docker:x:999:"; exit 0 ;;
+    *)       echo "docker:x:999:deploy,admin"; exit 0 ;;
+esac

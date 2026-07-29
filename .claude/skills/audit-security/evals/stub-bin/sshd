@@ -1,0 +1,15 @@
+#!/bin/sh
+# Заглушка sshd -T (действующая конфигурация). Сценарии — STUB_SSHD.
+case "${STUB_SSHD:-hardened}" in
+    missing) exit 127 ;;
+    weak)
+        echo "passwordauthentication yes"
+        echo "permitrootlogin yes"
+        echo "kbdinteractiveauthentication yes"
+        ;;
+    *)
+        echo "passwordauthentication no"
+        echo "permitrootlogin no"
+        echo "kbdinteractiveauthentication no"
+        ;;
+esac

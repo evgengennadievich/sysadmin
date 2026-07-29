@@ -1,0 +1,10 @@
+#!/bin/sh
+# Заглушка systemctl. Сценарии — STUB_SYSTEMCTL.
+#   missing  — утилиты нет (код 127) → состояние службы НЕИЗВЕСТНО
+#   inactive — служба не запущена (код 3 — штатный ответ systemctl)
+#   active   — служба работает
+case "${STUB_SYSTEMCTL:-active}" in
+    missing)  exit 127 ;;
+    inactive) echo "inactive"; exit 3 ;;
+    *)        echo "active"; exit 0 ;;
+esac
