@@ -49,7 +49,7 @@ if [ -z "$SERVER" ]; then
     exit 2
 fi
 
-PASS=0; WARN=0; FAIL=0; UNKNOWN=0
+PASS=0; WARN=0; FAIL=0; UNKNOWN=0; INFO=0
 RESULTS_HOST=()
 RESULTS_DOCKER=()
 RESULTS_GIT=()
@@ -58,6 +58,17 @@ RECOMMENDATIONS=()
 UNKNOWN_NOTES=()
 
 # add_result CATEGORY STATUS CHECK_NAME DETAILS
+#
+# Статусы:
+#   PASS    — проверка выполнена, нарушений нет
+#   WARN    — проверка выполнена, есть повод вмешаться
+#   FAIL    — проверка выполнена, есть нарушение
+#   UNKNOWN — проверку выполнить НЕ УДАЛОСЬ (не путать с «всё хорошо»)
+#   INFO    — не проверка, а справка (список правил, перечень портов). Не имеет
+#             исхода «хорошо/плохо» и потому НЕ считается пройденной проверкой:
+#             иначе сводка «11 PASS» завышает оценку защищённости за счёт строк,
+#             которые ничего не проверяют. Та же болезнь, что и ложный PASS,
+#             только на уровне итоговой цифры.
 add_result() {
     local CAT="$1" STATUS="$2" NAME="$3" DETAILS="$4"
     local LINE="| $NAME | $STATUS | $DETAILS |"
@@ -72,6 +83,7 @@ add_result() {
         WARN) WARN=$((WARN + 1)) ;;
         FAIL) FAIL=$((FAIL + 1)) ;;
         UNKNOWN) UNKNOWN=$((UNKNOWN + 1)); UNKNOWN_NOTES+=("$NAME — $DETAILS") ;;
+        INFO) INFO=$((INFO + 1)) ;;
     esac
 }
 
@@ -95,6 +107,49 @@ rexec_root() {
         return 127
     fi
     ssh -o ConnectTimeout=15 -o BatchMode=yes "$SERVER" "sudo -n $1" 2>/dev/null
+}
+
+# --- Маркер фактического выполнения ----------------------------------------
+# Одного кода возврата НЕ ХВАТАЕТ, чтобы отличить «команда отработала и ничего
+# не нашла» от «команда не отработала». Два реальных примера:
+#
+#   grep   — возвращает 1, когда совпадений нет. Это штатный ответ «чисто», но
+#            по коду он неотличим от отказа sudo, который тоже даёт 1. Из-за
+#            этого ветка PASS у проверки NOPASSWD была недостижима: самый
+#            благополучный исход системы показывался как UNKNOWN.
+#   конвейер — `getent group docker | cut -d: -f4` возвращает код ПОСЛЕДНЕЙ
+#            команды, то есть всегда 0. Отсутствие утилиты и обрыв связи давали
+#            пустой вывод с кодом 0 → PASS «группа пуста». Ложный PASS ровно
+#            того класса, против которого писалась правка 2026-07-29.
+#
+# Поэтому: на сервер уходит команда, которая ПРИ УСПЕШНОМ ЗАПУСКЕ дописывает в
+# конец вывода маркер. Есть маркер — проверка состоялась, и пустой вывод можно
+# читать как результат. Нет маркера — результата нет, статус UNKNOWN.
+RUN_MARK="__AUDIT_RAN__"
+
+# strip_mark — убрать маркер из вывода (маркер нужен только как признак)
+strip_mark() {
+    printf '%s' "$1" | grep -v "^${RUN_MARK}\$"
+}
+
+# has_mark — состоялась ли проверка
+has_mark() {
+    printf '%s' "$1" | grep -q "^${RUN_MARK}\$"
+}
+
+# ok_upto RC_MAX CMD — обёртка для команд, у которых ненулевой код штатен.
+# Пример: grep (1 = нет совпадений), getent (2 = запись не найдена).
+#
+# Команда заворачивается в удалённый `sh -c`. Это принципиально для проверок под
+# sudo: `sudo -n` при отказе в правах возвращает 1 — тот же код, что grep при
+# отсутствии совпадений. Если бы маркер печатался снаружи, отказ sudo выглядел бы
+# как «проверено, чисто». Внутри `sh -c` маркер физически не может появиться,
+# когда sudo не пустил: оболочка просто не запустилась.
+#
+# Ограничение: CMD не должна содержать одинарных кавычек (обёртка их использует).
+ok_upto() {
+    local RC_MAX="$1" CMD="$2"
+    printf "sh -c '%s; __rc=\$?; [ \$__rc -le %s ] && echo %s'" "$CMD" "$RC_MAX" "$RUN_MARK"
 }
 
 # --- Предполётная проверка транспорта --------------------------------------
@@ -148,7 +203,9 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
     # docker-подсетей. Решение о нужности правила — за человеком.
     if [ $UFW_RC -eq 0 ] && [ -n "$UFW_OUT" ] && ! echo "$UFW_OUT" | grep -qi "need to be root"; then
         ALLOW_RULES=$(echo "$UFW_OUT" | grep "ALLOW IN" | grep -vE "\(v6\)" | awk '{print $1}' | tr '\n' ' ')
-        add_result host PASS "UFW: состав правил" "ALLOW IN: ${ALLOW_RULES:-нет правил}"
+        # INFO, а не PASS: это перечень, а не проверка — у него нет исхода
+        # «хорошо/плохо», и в зачёт пройденных он идти не должен.
+        add_result host INFO "UFW: состав правил" "ALLOW IN: ${ALLOW_RULES:-нет правил}"
     else
         add_result host UNKNOWN "UFW: состав правил" "нет прав root — правила не прочитаны"
     fi
@@ -196,9 +253,17 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
     fi
 
     # --- fail2ban ---
-    F2B_ACTIVE=$(rexec "systemctl is-active fail2ban")
-    if [ "$F2B_ACTIVE" != "active" ]; then
-        add_result host FAIL "fail2ban" "не запущен (systemctl is-active → ${F2B_ACTIVE:-нет ответа})"
+    # `systemctl is-active` возвращает ненулевой код, когда служба не активна —
+    # это ответ, а не сбой. Прежняя версия смотрела только на текст вывода, и
+    # пустая строка (обрыв SSH, systemctl не ответил) давала FAIL «не запущен».
+    # Зеркало исходного дефекта: пустой вывод снова читался как результат.
+    F2B_RAW=$(rexec "$(ok_upto 3 'systemctl is-active fail2ban')")
+    F2B_ACTIVE=$(strip_mark "$F2B_RAW")
+    if ! has_mark "$F2B_RAW"; then
+        add_result host UNKNOWN "fail2ban" "systemctl не ответил — состояние службы не определено"
+        add_recommendation "[UNKNOWN] Состояние fail2ban не проверено. Проверь вручную: \`systemctl is-active fail2ban\`"
+    elif [ "$F2B_ACTIVE" != "active" ]; then
+        add_result host FAIL "fail2ban" "не запущен (systemctl is-active → ${F2B_ACTIVE:-пусто})"
         add_recommendation "[FAIL] fail2ban не запущен — \`apt install fail2ban && systemctl enable --now fail2ban\` (Yellow Zone)"
     else
         # fail2ban-client требует root. Без него — UNKNOWN, а не «jail отсутствует».
@@ -244,10 +309,15 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
     # NOPASSWD: ALL означает, что компрометация SSH-ключа даёт мгновенный root без
     # второго барьера. Это не всегда дефект (без него ломается автоматизация), но
     # оператор обязан знать, что барьер один.
-    SUDO_RULES=$(rexec_root "grep -rhE 'NOPASSWD' /etc/sudoers /etc/sudoers.d/ 2>/dev/null")
-    SUDO_RC=$?
-    if [ $SUDO_RC -ne 0 ]; then
+    # grep возвращает 1, когда совпадений нет — это ответ «чисто», а не сбой.
+    # Прежняя версия считала любой ненулевой код за «не прочитано», из-за чего
+    # ветка PASS ниже была НЕДОСТИЖИМА: лучший исход системы показывался как
+    # UNKNOWN. Теперь признак выполнения — маркер, а не код возврата.
+    SUDO_RAW=$(rexec_root "$(ok_upto 1 'grep -rhE NOPASSWD /etc/sudoers /etc/sudoers.d/ 2>/dev/null')")
+    SUDO_RULES=$(strip_mark "$SUDO_RAW")
+    if ! has_mark "$SUDO_RAW"; then
         add_result host UNKNOWN "sudo: правила NOPASSWD" "не прочитаны (нужен root)"
+        add_recommendation "[UNKNOWN] Правила sudo NOPASSWD не прочитаны. Проверь вручную: \`sudo grep -rhE NOPASSWD /etc/sudoers /etc/sudoers.d/\`"
     elif [ -z "$SUDO_RULES" ]; then
         add_result host PASS "sudo: правила NOPASSWD" "нет — sudo везде требует пароль"
     elif echo "$SUDO_RULES" | grep -qE 'NOPASSWD:\s*ALL'; then
@@ -261,12 +331,26 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
     # Добавлено 2026-07-29. Член группы docker может смонтировать / в контейнер и
     # получить root без sudo. Без этой проверки оценка «насколько сервер защищён»
     # получается завышенной: можно закрутить sudo и не заметить открытую дверь рядом.
-    DOCKER_MEMBERS=$(rexec "getent group docker | cut -d: -f4")
-    if [ -n "$DOCKER_MEMBERS" ]; then
+    # Конвейера здесь быть не должно: `getent ... | cut ...` возвращает код
+    # ПОСЛЕДНЕЙ команды, то есть всегда 0. Отсутствие getent, обрыв связи и
+    # несуществующая группа давали пустой вывод с кодом 0 — и проверка писала
+    # PASS «прямого пути к root через Docker нет». Разбор строки перенесён на
+    # свою сторону, признак выполнения — маркер.
+    DOCKER_RAW=$(rexec "$(ok_upto 2 'getent group docker')")
+    DOCKER_LINE=$(strip_mark "$DOCKER_RAW")
+    DOCKER_MEMBERS=$(printf '%s' "$DOCKER_LINE" | cut -d: -f4)
+    if ! has_mark "$DOCKER_RAW"; then
+        add_result host UNKNOWN "Группа docker" "состав группы не прочитан — getent не отработал"
+        add_recommendation "[UNKNOWN] Состав группы docker не проверен. Это важно: член группы docker получает root без sudo. Проверь вручную: \`getent group docker\`"
+    elif [ -z "$DOCKER_LINE" ]; then
+        add_result host PASS "Группа docker" "группы docker в системе нет"
+    elif [ -n "$DOCKER_MEMBERS" ]; then
         add_result host WARN "Группа docker" "состоят: $DOCKER_MEMBERS — это эквивалент root (монтирование / в контейнер)"
         add_recommendation "[WARN] Пользователи в группе docker ($DOCKER_MEMBERS) фактически имеют root. Это часто осознанный компромисс ради автоматизации — но учитывай его, когда оцениваешь пользу от ужесточения sudo: закрутив одну дверь, соседнюю оставляем открытой"
     else
-        add_result host PASS "Группа docker" "пуста — прямого пути к root через Docker нет"
+        # Оговорка: getent показывает только ДОПОЛНИТЕЛЬНЫХ членов группы.
+        # Пользователь, у которого docker — основная группа, здесь не виден.
+        add_result host PASS "Группа docker" "дополнительных членов нет"
     fi
 
     # --- Слушающие сокеты ---
@@ -282,7 +366,10 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "host" ]; then
         add_result host UNKNOWN "Внешние слушающие порты" "ss не отработал — список портов не получен"
     else
         EXTERNAL=$(echo "$SS_OUT" | awk 'NR>1 && ($4 ~ /^0\.0\.0\.0:/ || $4 ~ /^\*:/ || $4 ~ /^\[::\]:/) {split($4,a,":"); print a[length(a)]}' | sort -un | tr '\n' ' ')
-        add_result host PASS "Внешние слушающие порты" "${EXTERNAL:-нет}"
+        # INFO по той же причине: список портов сам по себе не «пройденная
+        # проверка». Оценка «этот порт открыт осознанно или нет» требует
+        # инвентаря, которого у скрипта нет.
+        add_result host INFO "Внешние слушающие порты" "${EXTERNAL:-нет}"
         # Порты вне 22/80/443 — не приговор, а повод сверить с UFW и инвентарём.
         UNUSUAL=$(echo "$EXTERNAL" | tr ' ' '\n' | grep -vE '^(22|80|443)$' | tr '\n' ' ')
         if [ -n "$(echo "$UNUSUAL" | tr -d ' ')" ]; then
@@ -312,24 +399,42 @@ if [ "$SCOPE" = "all" ] || [ "$SCOPE" = "docker" ]; then
     # файл, а отчёт показывал PASS «все .env mode 600» — то есть уверенность
     # была там, где проверки не происходило вовсе.
     # Теперь: считаем найденное. Ноль найденных файлов — это UNKNOWN, не PASS.
-    ENV_FOUND=$(rexec "find $ENV_PATHS -maxdepth 4 -name '.env' -type f 2>/dev/null | wc -l")
-    ENV_RC=$?
-    if [ $ENV_RC -ne 0 ] || [ -z "$ENV_FOUND" ]; then
+    # Второе издание правки. Поиск идёт ОДНИМ вызовом (раньше их было два —
+    # счётчик и разбор прав, и они могли разойтись) и ПОД ROOT: от обычного
+    # пользователя `find` молча пропускает каталоги без доступа, а отчёт при этом
+    # утверждал «проверено N файлов, все mode 600». Полнота, которой не было.
+    # Точка с запятой после -exec должна дойти до find как аргумент, а не быть
+    # съедена оболочкой сервера как разделитель команд — отсюда \\;
+    ENV_CMD="find $ENV_PATHS -maxdepth 4 -name .env -type f -exec stat -c \"%a %U:%G %n\" {} \\; 2>/dev/null"
+    ENV_SCOPE="root"
+    ENV_RAW=$(rexec_root "$(ok_upto 1 "$ENV_CMD")")
+    if ! has_mark "$ENV_RAW"; then
+        # Без root — читаем чем есть, но полноту больше не утверждаем.
+        ENV_SCOPE="user"
+        ENV_RAW=$(rexec "$(ok_upto 1 "$ENV_CMD")")
+    fi
+    ENV_LIST=$(strip_mark "$ENV_RAW")
+    ENV_FOUND=$(printf '%s' "$ENV_LIST" | grep -c . )
+    BAD_ENV=$(printf '%s' "$ENV_LIST" | grep -vE '^600 ' | grep . )
+    BAD_COUNT=$(printf '%s' "$BAD_ENV" | grep -c . )
+
+    if ! has_mark "$ENV_RAW"; then
         add_result docker UNKNOWN "Права .env" "поиск не выполнен (проверялись пути: $ENV_PATHS)"
+    elif [ "$BAD_COUNT" -gt 0 ]; then
+        # Найденное нарушение — факт независимо от полноты обхода.
+        add_result docker WARN "Права .env" "проверено $ENV_FOUND, с лишними правами: $BAD_COUNT"
+        add_recommendation "[WARN] .env с избыточными правами (секреты читает любой процесс системы):
+$BAD_ENV
+Исправление: \`chmod 600 <файл>\` (Yellow Zone). Проверь, от какого пользователя работает контейнер — если от root, смена прав его не сломает"
     elif [ "$ENV_FOUND" -eq 0 ]; then
         add_result docker UNKNOWN "Права .env" "не найдено ни одного .env в путях: $ENV_PATHS — проверять нечего, но и подтвердить нечего"
         add_recommendation "[UNKNOWN] Файлы .env не найдены в $ENV_PATHS. Если сервисы живут в другом каталоге, передай его через --env-paths, иначе проверка прав секретов не проводилась"
+    elif [ "$ENV_SCOPE" = "user" ]; then
+        # Нарушений не нашли, но обход был неполным — утверждать «все 600» нельзя.
+        add_result docker UNKNOWN "Права .env" "проверено $ENV_FOUND, все mode 600, НО поиск шёл без root — каталоги без доступа пропущены молча"
+        add_recommendation "[UNKNOWN] Права .env подтверждены лишь частично: без sudo поиск не заходит в чужие каталоги. Для полной проверки нужен sudo без пароля либо ручной прогон: \`sudo find $ENV_PATHS -maxdepth 4 -name .env -type f -exec stat -c '%a %n' {} \;\`"
     else
-        BAD_ENV=$(rexec "find $ENV_PATHS -maxdepth 4 -name '.env' -type f -exec stat -c '%a %U:%G %n' {} \; 2>/dev/null | grep -vE '^600 '")
-        if [ -z "$BAD_ENV" ]; then
-            add_result docker PASS "Права .env" "проверено файлов: $ENV_FOUND, все mode 600"
-        else
-            BAD_COUNT=$(echo "$BAD_ENV" | grep -c . )
-            add_result docker WARN "Права .env" "проверено $ENV_FOUND, с лишними правами: $BAD_COUNT"
-            add_recommendation "[WARN] .env с избыточными правами (секреты читает любой процесс системы):
-$BAD_ENV
-Исправление: \`chmod 600 <файл>\` (Yellow Zone). Проверь, от какого пользователя работает контейнер — если от root, смена прав его не сломает"
-        fi
+        add_result docker PASS "Права .env" "проверено файлов: $ENV_FOUND (поиск под root), все mode 600"
     fi
 fi
 
@@ -424,6 +529,10 @@ REPORT_FILE="${OUTPUT:-/tmp/security-audit-${TS}.md}"
     echo "**Сервер:** $SERVER"
     echo "**Scope:** $SCOPE"
     echo "**Сводка:** $PASS PASS / $WARN WARN / $FAIL FAIL / $UNKNOWN UNKNOWN"
+    if [ "$INFO" -gt 0 ]; then
+        echo ""
+        echo "_Плюс $INFO справочных строк (INFO) — это перечни, а не проверки, в зачёт не идут._"
+    fi
     echo ""
     if [ "$SUDO_AVAILABLE" = "no" ]; then
         echo "> **Внимание:** sudo без пароля недоступен, часть проверок уровня root не выполнена."
@@ -486,13 +595,24 @@ REPORT_FILE="${OUTPUT:-/tmp/security-audit-${TS}.md}"
 
 echo ""
 echo "=== Аудит завершён ==="
-echo "Сводка: $PASS PASS / $WARN WARN / $FAIL FAIL / $UNKNOWN UNKNOWN"
+echo "Сводка: $PASS PASS / $WARN WARN / $FAIL FAIL / $UNKNOWN UNKNOWN (+$INFO INFO)"
 echo "Отчёт: $REPORT_FILE"
 echo ""
 if [ "$UNKNOWN" -gt 0 ]; then
     echo "Не выполнено проверок: $UNKNOWN — см. раздел «Непроверенное» в отчёте."
 fi
+
+# Коды возврата. Прежде выход был 0 при любом числе непроверенных пунктов, то
+# есть вызывающая сторона видела «успех» там, где половина проверок не
+# состоялась — ровно против принципа, объявленного в шапке файла.
+#   0 — все проверки выполнены, нарушений нет
+#   1 — есть FAIL
+#   3 — FAIL нет, но часть проверок выполнить не удалось (UNKNOWN)
 if [ "$FAIL" -gt 0 ]; then
     echo "ВНИМАНИЕ: найдены FAIL'ы — рассмотри как incident."
     exit 1
+fi
+if [ "$UNKNOWN" -gt 0 ]; then
+    echo "Нарушений не найдено, НО часть проверок не выполнена — это не «всё чисто»."
+    exit 3
 fi

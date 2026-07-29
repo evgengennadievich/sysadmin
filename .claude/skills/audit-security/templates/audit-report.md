@@ -5,6 +5,8 @@
 **Метод:** прогон `scripts/security-audit.sh` + ручная перепроверка каждой находки.
 **Сводка:** X PASS / Y WARN / Z FAIL / N UNKNOWN
 
+_Плюс K справочных строк (INFO) — перечни, а не проверки, в зачёт не идут._
+
 > **Если UNKNOWN > 0 — вынеси список сюда, в шапку.** UNKNOWN означает «проверка не
 > выполнена» (нет прав, нет каталога, нет утилиты), а не «нарушений не найдено».
 > Отсутствие FAIL при непройденных проверках ничего не доказывает.
@@ -22,21 +24,23 @@
 | Проверка | Статус | Детали |
 |----------|--------|--------|
 | UFW активен и default deny | PASS / WARN / FAIL / UNKNOWN | Status: active, Default: deny incoming |
-| UFW: состав правил | PASS / UNKNOWN | ALLOW IN: 22, 80, 443, … — каждое правило сверь с инвентарём |
+| UFW: состав правил | INFO / UNKNOWN | ALLOW IN: 22, 80, 443, … — каждое правило сверь с инвентарём |
 | SSH: вход по паролю | PASS / FAIL / UNKNOWN | no (источник: `sshd -T` — действующая конфигурация) |
 | SSH: вход root | PASS / WARN / UNKNOWN | no / prohibit-password |
 | SSH: интерактивная аутентификация | PASS / WARN | обходной путь для паролей мимо PasswordAuthentication |
-| fail2ban: sshd jail | PASS / WARN / FAIL / UNKNOWN | активен; в бане сейчас N, всего забанено M |
+| fail2ban (служба) | PASS / FAIL / UNKNOWN | `systemctl is-active` → active. Пустой ответ = UNKNOWN, а не «не запущен» |
+| fail2ban: sshd jail | PASS / WARN / UNKNOWN | активен; в бане сейчас N, всего забанено M |
 | unattended-upgrades | PASS / WARN | включён, только security, без авто-перезагрузки |
-| Внешние слушающие порты | PASS / UNKNOWN | список портов; нестандартные — не дефект, но должны быть в инвентаре |
-| sudo без пароля | WARN / — | `NOPASSWD: ALL` = компрометация ключа даёт мгновенный root |
+| Внешние слушающие порты | INFO / UNKNOWN | список портов; нестандартные — не дефект, но должны быть в инвентаре |
+| sudo: правила NOPASSWD | PASS / WARN / UNKNOWN | `NOPASSWD: ALL` = компрометация ключа даёт мгновенный root |
+| Группа docker | PASS / WARN / UNKNOWN | состав группы = список тех, кто имеет root без sudo. `getent` показывает только дополнительных членов |
 
 ## Docker
 
 | Проверка | Статус | Детали |
 |----------|--------|--------|
 | daemon.json | PASS / WARN | без insecure-registries |
-| Права `.env` | PASS / WARN / UNKNOWN | **проверено файлов: N** — если N=0, это UNKNOWN, а не PASS |
+| Права `.env` | PASS / WARN / UNKNOWN | **проверено файлов: N** — если N=0, это UNKNOWN, а не PASS. PASS только при поиске под root: без sudo `find` молча пропускает чужие каталоги |
 | Публикация портов контейнеров | PASS / WARN | наружу публикуется только то, что должно |
 
 > **Группа `docker` = root.** Если пользователь в ней состоит, он может смонтировать
