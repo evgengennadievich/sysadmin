@@ -76,9 +76,13 @@ NurVPN с РФ-сервера отдаёт нормально (проверен�
 
 ## Часть 2. Положить список на свой сервер как ссылку-подписку
 
-Нужен веб-сервер, отдающий статичный файл по HTTPS. У нас на `prod-82.148.28.22`
-уже есть готовый механизм: nginx `location /c/` → `alias /var/www/configs/` на домене
-`news.vefmvtech.ru` (vhost `opengate`). Файлы там же, где другие конфиги.
+Нужен веб-сервер, отдающий статичный файл по HTTPS. Механизм простой: в уже
+обслуживаемый nginx-домен добавляется `location /c/` → `alias /var/www/configs/`.
+Отдельный домен и отдельный vhost не нужны — подойдёт любой существующий сайт.
+
+Конкретные хост, домен и SSH-алиас в этом документе не названы намеренно (C.4):
+знание универсальное, а адреса живут в `inventory/` оператора. Ниже они заданы
+переменными — подставь свои перед запуском.
 
 ```nginx
 # фрагмент vhost (уже существует):
@@ -91,19 +95,23 @@ location /c/ {
 ```
 
 ```bash
+# 0. Свои значения — из inventory оператора (в knowledge их не хардкодим, C.4):
+SRV="ssh-алиас-сервера"        # servers[].alias из infra-config.json
+SUB_HOST="домен-подписки"      # уже обслуживаемый nginx домен
+
 # 1. Имя файла — СЛУЧАЙНОЕ неугадываемое (ключи лежат в открытом вебе!):
 FNAME="$(python3 -c 'import secrets;print(secrets.token_urlsafe(12).replace("-","").replace("_","")[:16])').txt"
 
 # 2. Заливаем сам base64-ответ (формат уже правильный, ничего не переупаковываем):
-scp sub.b64 selectel:/var/www/configs/$FNAME
-ssh selectel "chown www-data:www-data /var/www/configs/$FNAME && chmod 644 /var/www/configs/$FNAME"
+scp sub.b64 "$SRV:/var/www/configs/$FNAME"
+ssh "$SRV" "chown www-data:www-data /var/www/configs/$FNAME && chmod 644 /var/www/configs/$FNAME"
 
 # 3. Проверяем отдачу:
 curl -sS -o /dev/null -w 'HTTP %{http_code} type=%{content_type}\n' \
-  https://news.vefmvtech.ru/c/$FNAME
+  "https://$SUB_HOST/c/$FNAME"
 ```
 
-**Готовая ссылка** вида `https://news.vefmvtech.ru/c/<rnd>.txt` добавляется в Happ
+**Готовая ссылка** вида `https://<домен-подписки>/c/<rnd>.txt` добавляется в Happ
 (и в любой клиент: sing-box, v2rayN, Streisand) **как обычная подписка** — `+` →
 вставить ссылку. HWID-привязки и лимита устройств нет.
 
