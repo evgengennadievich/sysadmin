@@ -8,6 +8,7 @@ description: |
   «monitoring stack».
   НЕ для серверов <2 ГБ RAM; НЕ для VPN-панели (для этого — отдельный скилл VPN-блока).
 allowed-tools: Bash, Read, Edit, Write
+disable-model-invocation: true   # меняет боевую систему — только по явной команде оператора (ADR-0027)
 ---
 
 <role>
@@ -147,8 +148,8 @@ for comp in $(echo "$COMPONENTS" | tr ',' ' '); do
 done
 ```
 
-Все версии в шаблонах **запинены** (без `:latest`). См. `references/component-tradeoffs.md`
-почему — Docker Compose recreate'ит контейнер всегда при `:latest`, даже если digest тот же.
+Все версии в шаблонах **запинены** (без `:latest`): Docker Compose пересоздаёт контейнер
+на каждый `up -d` при `:latest`, даже если digest не менялся. Разбор — `references/pitfalls.md`.
 
 ## Шаг 3: nginx reverse-proxy
 
@@ -243,8 +244,8 @@ bash scripts/configure-beszel-pair.sh
 5. Регистрирует agent через API hub'а (или печатает инструкцию для UI, если API недоступен)
 
 > **Важно:** Beszel hub работает в режиме `network_mode: host`, потому что в bridge-сети
-> iptables может блокировать порт agent'а (45876) — это известная проблема. См.
-> `references/component-tradeoffs.md`.
+> iptables блокирует порт agent'а (45876) — известная проблема. Изоляцию тогда даёт
+> `ufw deny 8090/tcp`, а не сеть Docker. Разбор — `references/pitfalls.md`.
 
 ## Шаг 8: Telegram-интеграция (если COMPONENTS включает telegram)
 
@@ -276,58 +277,24 @@ done
 
 ## Шаг 10: Запись в inventory
 
-```bash
-# В inventory/services.md добавить строки:
-# uptime-kuma  | мониторинг | 127.0.0.1:3001 | panel.$DOMAIN/         | louislam/uptime-kuma:2.2.1
-# beszel       | мониторинг | host:8090      | panel.$DOMAIN/beszel/  | henrygd/beszel:0.18.7
-# beszel-agent | мониторинг | host:45876     | (внутренний)           | henrygd/beszel-agent:0.18.7
-# dozzle       | логи       | 127.0.0.1:8080 | panel.$DOMAIN/dozzle/  | amir20/dozzle:v10.4.1
-# dockge       | compose UI | 127.0.0.1:5001 | panel.$DOMAIN/dockge/  | louislam/dockge:1.5.0
-# diun         | image upd  | (нет порта)    | (через Telegram)       | crazymax/diun:0.66
-```
+В `inventory/services.md` добавляю по строке на каждый поднятый контейнер: имя, роль,
+адрес и порт, путь в панели, образ **с фактической версией из своего compose-файла**.
+Готовый образец таблицы — `references/pitfalls.md`, раздел «Что писать в inventory».
 
-# Failed Attempts (граблекейс)
+Версии не переписываю по памяти и не копирую из справки — беру из `templates/*.yml`,
+которые реально применил (C.2).
 
-- **«Запуск без конфига инфры (`infra-config.json`)»** — раньше скилл требовал кучу CLI-параметров,
-  оператор путался какие обязательные. Урок: скилл не угадывает намерения. Нет конфига —
-  `exit 1` с указанием на `/sysadmin-init`. `monitoring.enabled=false` — `exit 0` с
-  указанием на `/sysadmin-init --reconfigure`. Никаких defaults «как у Василия».
-- **«Python uptime-kuma-api для Kuma 2.x»** — НЕ работает, библиотека только для 1.x.
-  В 2.x изменился socket.io протокол. Только Node.js socket.io клиент.
-- **«Beszel hub в bridge network»** — iptables блокирует порт 45876 с Docker bridge gateway,
-  agent не достижим. Только `network_mode: host`. UFW deny 8090/tcp как замена изоляции.
-- **«:latest теги»** — Docker Compose сравнивает строку image, а не digest. При `:latest`
-  recreate'ит контейнер каждый `up -d`, даже если digest не изменился. ВСЕГДА пиньте
-  конкретные версии (или digest).
-- **«acme.sh без `--reloadcmd`»** — после обновления cert nginx продолжает использовать
-  старый, пока вручную не сделать reload. Всегда указывай reloadcmd.
-- **«htpasswd с -i (interactive password)»** — пароль попадает в shell history. Используй
-  только `htpasswd -c -B` без `-i`, ввод интерактивно.
+# Bundled resources
 
-# Граничные случаи
-
-- **Установка только Kuma (без Beszel/Dozzle/Dockge/Diun)** — параметр `COMPONENTS=kuma`;
-  nginx vhost проще (один upstream), RAM-бюджет ~50 МБ.
-- **Сервер без публичного IP** — HTTP-01 challenge не работает. Используй DNS-01 через
-  API DNS-провайдера (acme.sh поддерживает большинство).
-- **Сервер за CDN (Cloudflare)** — TLS-терминирование на CDN, поэтому certbot/acme.sh не
-  обязателен. Достаточно self-signed cert + CDN flexible mode (хотя security-wise
-  лучше strict + DNS-01).
-- **Несколько серверов** — Beszel hub один на «контрольном» сервере, agent'ы на каждом
-  целевом. Скрипт `configure-beszel-pair.sh` запускается на hub-сервере, генерирует ключи
-  для каждого agent'а отдельно.
-- **WireGuard / приватная сеть** — если сервер недоступен из публичного интернета,
-  nginx vhost можно открыть только на VPN-интерфейсе (`listen 10.0.0.1:443`), без
-  Let's Encrypt (использовать internal CA или mkcert).
-
-# Связанные ресурсы
-
-- `templates/uptime-kuma-compose.yml` — Kuma + monitoring-default network
-- `templates/beszel-compose.yml` — Hub в host network mode
-- `templates/dozzle-compose.yml` — DOZZLE_AUTH_PROVIDER=simple, монтаж docker.sock
-- `templates/dockge-compose.yml` — монтаж /opt/stacks для compose-управления
-- `templates/diun-compose.yml` — file watch /opt + Telegram через apprise
-- `templates/nginx-monitoring-vhost.conf` — basic auth + TLS + reverse-proxy на все компоненты
-- `scripts/configure-kuma-via-api.sh` — Node.js socket.io клиент изнутри контейнера
-- `scripts/configure-beszel-pair.sh` — bcrypt + SQLite + key pairing
-- `references/component-tradeoffs.md` — что выбирать для разных сценариев + RAM-бюджет
+| Файл | Что это и когда открывать |
+|---|---|
+| `references/component-tradeoffs.md` | **Что ставить**: RAM-бюджет по компонентам (фактические замеры), четыре готовые конфигурации от минимальной до полной, trade-off каждой. Открывать до Шага 1, когда решаешь состав `COMPONENTS` |
+| `references/pitfalls.md` | **Когда шаг не сработал**: шесть граблей (Kuma 2.x и socket.io, Beszel в bridge, `:latest`, acme.sh без reloadcmd, htpasswd `-i`), случай приватной сети и образец записи в inventory |
+| `templates/uptime-kuma-compose.yml` | Kuma + monitoring-default network |
+| `templates/beszel-compose.yml` | Hub в host network mode |
+| `templates/dozzle-compose.yml` | `DOZZLE_AUTH_PROVIDER=simple`, монтаж docker.sock |
+| `templates/dockge-compose.yml` | монтаж `/opt/stacks` для compose-управления |
+| `templates/diun-compose.yml` | file watch `/opt` + Telegram через apprise |
+| `templates/nginx-monitoring-vhost.conf` | basic auth + TLS + reverse-proxy на все компоненты |
+| `scripts/configure-kuma-via-api.sh` | Node.js socket.io клиент изнутри контейнера (Шаг 6) |
+| `scripts/configure-beszel-pair.sh` | bcrypt + SQLite + сопряжение ключей (Шаг 7) |

@@ -142,7 +142,7 @@ docker-сети).
 |---|---|---|---|
 | **data** (хранилища) | `internal: true` | postgres, redis, mongo и их клиенты | без egress в интернет — защита БД от утечек даже при компрометации приложения |
 | **services** (приложения) | нет | сайты, API, боты, воркеры, nginx-host-апстримы | обычная bridge-сеть, может ходить наружу |
-| **proxy-corridor** (опц.) | нет, **фикс. subnet+gateway** | контейнеры, которым нужен обход блокировок через VPN/прокси на хосте | gateway хоста хардкодится в `.env` контейнеров: `HTTP_PROXY=http://172.18.0.1:1081` |
+| **proxy-corridor** (опц.) | нет, **фикс. subnet+gateway** | контейнеры, которым нужен обход блокировок через VPN/прокси на хосте | gateway хоста хардкодится в `.env` контейнеров: `HTTP_PROXY=http://172.18.0.1:<порт моста>` — порт сверяй по `ss -tlnp` на хосте (пример стека-носителя: 1080) |
 | **monitoring** | нет | Uptime-Kuma, Dozzle, Dockge, Diun, дашборды | имеет право подключаться к другим сетям для observability; другие сети monitoring не видят |
 
 В стеке-носителе они называются `data` / `services` / `xray` / `monitoring`. Выбирай свои
@@ -192,7 +192,8 @@ defense-in-depth и обычных клиентов) + `services` (для DNAT, 
 │
 ├── Прокси-клиент (контейнер, которому нужен обход блокировок РФ)
 │     networks: [services, proxy-corridor]
-│     В .env: HTTP_PROXY=http://<gateway-proxy-corridor>:1081 и аналогичные
+│     В .env: HTTP_PROXY=http://<gateway-proxy-corridor>:<порт моста> и аналогичные
+│     (порт моста — из ss -tlnp на хосте, не по памяти)
 │     БЕЗ ports: (если nginx в сети services)
 │
 ├── Монитор (Uptime-Kuma / Dozzle / Dockge / Diun / собственный дашборд)

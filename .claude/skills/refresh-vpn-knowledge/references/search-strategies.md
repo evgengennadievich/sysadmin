@@ -4,6 +4,47 @@
 формулирует под каждый файл. Цель — переиспользуемые поисковые формулы,
 которые не нужно сочинять заново каждый раз.
 
+Открывать на **Шаге 2** процедуры (WebSearch-обход): взять отсюда готовые формулы
+под тот файл, который актуализируешь.
+
+---
+
+# Куда смотреть по слоям (карта источников)
+
+Общая раскладка «файл → источники». Развёрнутые формулы запросов — ниже по документу.
+
+## Слой `_live/` — ежедневное состояние блокировок
+
+| Файл | Источники |
+|---|---|
+| `frontline-ru.md` | `site:ntc.party 2026 Russia VPN` + `site:gfw.report Russia` + `site:blog.cloudflare.com Russia` + Mediazona / Meduza / Moscow Times за последние недели |
+| `frontline-cn.md` | `site:gfw.report 2026` + greatfirewallguide.com + USENIX |
+| `frontline-ir.md` | arxiv preprints + Iran censorship reports 2026 |
+| `frontline-by.md` | Carnegie + RFE/RL + CSO Meter Belarus 2026 |
+| `timeline.md` | добавляются новые события из всех `frontline-*` |
+
+## Слой `_reference/` — устройство мира, меняется реже
+
+| Файл | Источники |
+|---|---|
+| `vpn-protocols.md` | `XTLS/Xray-core releases` + `SagerNet/sing-box releases` + `MHSanaei/3x-ui releases` |
+| `transports.md` | новые transport-фичи в release notes XTLS / sing-box |
+| `fronting-strategies.md` | Cloudflare blog + новые CDN-fronting туториалы |
+| `client-apps.md` | `sing-box iOS client release` + `Hiddify release notes` + `Karing release` + удаления из App Store |
+| `3x-ui-panel.md`, `3x-ui-api.md` | MHSanaei/3x-ui issues и releases |
+
+## Слой `_meta/` — стабильное, обновляется по запросу
+
+| Файл | Когда трогаем |
+|---|---|
+| `sources-registry.md` | добавление или удаление источника по факту |
+| `glossary.md` | новые термины (XHTTP, AnyTLS и т.п.) |
+| `conflicts.md` | разрешение старых конфликтов |
+
+---
+
+# Формулы запросов по файлам
+
 ## vpn-protocols.md
 
 **Что отслеживаем:** Reality status в РФ, новые VPN-протоколы вытесняющие VLESS,

@@ -188,7 +188,11 @@ EOF
 
 # --- Инструкция по установке bash (нативный Windows без Git for Windows) ---
 _bash_manual_hint() {
-    cat <<'EOF' >&2
+    # Подсказка зависит от ОС: советовать Git for Windows владельцу Linux —
+    # бессмыслица, которая выглядит как поломка агента (замечено 2026-07-25).
+    case "$(_detect_local_os)" in
+        MINGW)
+            cat <<'EOF' >&2
 Claude Code на Windows использует bash только если установлен Git for Windows.
 Без него команды идут через PowerShell, и скиллы агента не работают.
 Поставь Git for Windows (в нём есть Git Bash):
@@ -196,6 +200,27 @@ Claude Code на Windows использует bash только если уст�
   - или вручную: https://git-scm.com/download/win (значения по умолчанию)
 После установки ПЕРЕЗАПУСТИ сессию Claude Code.
 EOF
+            ;;
+        Darwin)
+            cat <<'EOF' >&2
+На macOS bash есть из коробки (/bin/bash). Если этой команды нет или Claude Code
+работает в непривычной оболочке — проверь:
+  which bash          — путь к bash
+  echo "$SHELL"       — какая оболочка по умолчанию
+Скиллы рассчитаны на bash или zsh. После изменений ПЕРЕЗАПУСТИ сессию Claude Code.
+EOF
+            ;;
+        *)   # Linux, BSD и всё неопознанное: универсальный совет вместо windows-специфичного
+            cat <<'EOF' >&2
+Нужен bash (скрипты скиллов запускаются им) и оболочка bash или zsh.
+Установка в типовых дистрибутивах:
+  apt install bash      (Debian/Ubuntu)
+  dnf install bash      (Fedora/RHEL)
+  apk add bash          (Alpine)
+После установки ПЕРЕЗАПУСТИ сессию Claude Code.
+EOF
+            ;;
+    esac
 }
 
 # --- Главная функция гейта ---
@@ -208,15 +233,38 @@ ensure_local_env() {
     LOCAL_ENV_PM="$(_detect_pkg_manager)"
     LOCAL_ENV_JQ="$(command -v jq 2>/dev/null || true)"
 
-    # 1. bash. Проверяем НАЛИЧИЕ бинарника, а не то, что текущий процесс — bash:
-    #    Claude Code гоняет команды через дефолтный шелл оператора (на macOS с Catalina
-    #    это обычно zsh), и $BASH_VERSION в zsh-процессе пуста, даже если bash в системе
-    #    есть и прекрасно работает (инцидент: ложный Windows-хинт на чистом macOS+zsh).
-    if ! command -v bash >/dev/null 2>&1; then
-        echo "ERROR: нужен bash, а оболочка другая." >&2
+    # 1. Пригодность оболочки.
+    #
+    # ⚠️ Здесь НЕЛЬЗЯ проверять «$BASH_VERSION непуст». Файл подключается через `source`,
+    # то есть исполняется в оболочке ВЫЗЫВАЮЩЕГО. На macOS это zsh, где $BASH_VERSION
+    # пуст всегда — и гейт печатал владельцу мака инструкцию «поставь Git for Windows»
+    # и отказывал. `/sysadmin-init` был непроходим на маке в принципе (живой прогон
+    # 2026-07-25). Прежний комментарий утверждал «дошли сюда — значит bash»; для
+    # `source` это неверно.
+    #
+    # Реальных требований два, проверяем именно их:
+    #   а) текущая оболочка — POSIX-совместимая (bash или zsh), иначе inline-блоки
+    #      скиллов не исполнятся;
+    #   б) на машине есть бинарник bash, потому что скрипты скиллов запускаются
+    #      с шебангом `#!/usr/bin/env bash`.
+    # Windows без Git for Windows не проходит ни один из двух пунктов — защита C.9
+    # (запрет на суррогаты при непригодном окружении) сохраняется.
+    if [ -z "${BASH_VERSION:-}" ] && [ -z "${ZSH_VERSION:-}" ]; then
+        echo "ERROR: оболочка не bash и не zsh — inline-код скиллов в ней не исполнится." >&2
         _bash_manual_hint
         return 1
     fi
+    if ! command -v bash >/dev/null 2>&1; then
+        echo "ERROR: на машине нет bash — скрипты скиллов запускаются им." >&2
+        _bash_manual_hint
+        return 1
+    fi
+
+    # ⚠️ Оболочка zsh пригодна, но у неё есть отличие, о которое уже спотыкались:
+    # она НЕ дробит `$VAR` на слова. Любой inline-код скиллов должен перебирать
+    # списки массивом (`arr=(a b); for x in "${arr[@]}"`), а не строкой
+    # (`for x in $STR`) — иначе цикл молча делает одну итерацию со слипшимся
+    # значением. Найдено живым прогоном в inventory-scan и rotate-secrets.
 
     # 2. jq уже есть?
     if [ -n "$LOCAL_ENV_JQ" ]; then

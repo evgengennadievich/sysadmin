@@ -118,13 +118,16 @@ ssh old "cd /opt/<svc> && docker compose stop"
 # 2. pg_dumpall (~10-30 мин для 50GB БД)
 ssh old "docker exec postgres pg_dumpall -U postgres | gzip > /backup/full.sql.gz"
 
-# 3. tar volumes
+# 3. tar volumes (уделить внимание правам владельца — например, postgres uid 999:
+#    архив должен сохранить uid/gid, иначе контейнер не поднимется на восстановленных данных)
 ssh old "tar czf /backup/docker-volumes.tar.gz /var/lib/docker/volumes/"
 
 # 4. scp на новый (~5-15 мин в зависимости от bandwidth)
 ssh old "scp /backup/*.gz new:/tmp/"
 
 # 5. На новом: restore схемы и volumes
+# 🔴 RED ZONE: `tar xzf ... -C /` перезаписывает живые файлы целевой системы поверх корня,
+#    отката нет. Перед запуском — 4-шаговая процедура с type-to-confirm (SKILL.md, «Зоны риска»).
 ssh new "tar xzf /tmp/docker-volumes.tar.gz -C /"
 ssh new "cd /opt/<svc> && docker compose up -d postgres"
 ssh new "gunzip < /tmp/full.sql.gz | docker exec -i postgres psql -U postgres"
@@ -167,11 +170,14 @@ ssh new "cd /opt/<svc> && docker compose up -d"
 # День 1 — первый полный rsync
 rsync -avz /var/lib/docker/volumes/ new:/var/lib/docker/volumes/  # ~10-60 мин
 
-# День 2 — delta
+# День 2 — delta — 🔴 RED ZONE: `--delete` стирает на приёмнике всё, чего нет на источнике.
+#   Перепутанные местами хосты = необратимое уничтожение боевого сервера одной командой.
+#   Каждый запуск с --delete — отдельный type-to-confirm (SKILL.md, «Зоны риска»).
 rsync -avz --delete /var/lib/docker/volumes/ new:/var/lib/docker/volumes/  # ~30 сек - 5 мин
 
 # День 3 — cutover окно
 ssh old "cd /opt/<svc> && docker compose stop"     # downtime START
+# 🔴 RED ZONE (--delete), см. выше — type-to-confirm перед запуском
 rsync -avz --delete /var/lib/docker/volumes/ new:/var/lib/docker/volumes/  # ~10 сек
 # pg_dumpall отдельно для PG (он не rsync'ится корректно)
 ssh old "docker exec postgres pg_dumpall | gzip | ssh new 'gunzip | docker exec -i postgres psql -U postgres'"

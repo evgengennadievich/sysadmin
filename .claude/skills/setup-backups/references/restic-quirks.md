@@ -3,7 +3,20 @@
 Справочник граничных случаев, выявленных в реальной эксплуатации. Используй как чек-лист
 при отладке непонятных ошибок.
 
+Грабли **обвязки** (скрипты дампа, оркестратор, cron-окружение, алерты, уборка
+multipart-огрызков) — в соседнем `pipeline-pitfalls.md`. Здесь только сам restic
+и хранилища.
+
 ## Хранилища
+
+Форма `RESTIC_REPOSITORY` по типу хранилища — это первое, что нужно при `restic init`:
+
+| Хранилище | `RESTIC_REPOSITORY` | Что ещё нужно |
+|---|---|---|
+| AWS S3 | `s3:s3.amazonaws.com/<bucket>/backups/infra` | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` в env |
+| Backblaze B2 | `b2:<bucket>:backups/infra` | `B2_ACCOUNT_ID` + `B2_ACCOUNT_KEY` в env |
+| WebDAV (Я.Диск / NextCloud / ownCloud) | `rclone:<remote>:backups/infra` | `rclone config` с типом webdav и endpoint провайдера |
+| S3-совместимое (MinIO / Wasabi / Yandex Object Storage) | `s3:<endpoint>/<bucket>/backups/infra` | те же `AWS_*` env, endpoint подменён |
 
 ### WebDAV-хранилища через rclone (Яндекс.Диск, NextCloud, ownCloud)
 

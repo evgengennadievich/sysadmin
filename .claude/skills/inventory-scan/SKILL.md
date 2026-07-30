@@ -4,8 +4,13 @@ description: |
   Read-only инвентаризация сервера: dump-snapshot.sh → 9 текстовых документов в inventory/
   (services, networks, volumes, databases, domains, cron, host-scripts, automations, server).
   Сравнение с прошлым inventory с выделением drift'ов + чек «хлам» (сироты-volume, сети вне
-  эталона, дубли compose). Диаграммы не генерирует (ADR-0019: источник фактов — снимок,
+  эталона, дубли compose) + чек «дрейф IaC» (репозиторий конфигураций ↔ сервер в обе стороны:
+  vhost, каталоги стеков, вызовы деплоя, конфигурация только на сервере).
+  Диаграммы не генерирует (ADR-0019: источник фактов — снимок,
   витрина — дашборд). Green Zone.
+  Работает и на хостах БЕЗ Docker (нативный VPS: 3X-UI, nginx, systemd-сервисы) — снимок
+  собирается по systemd/портам/nginx/TLS/firewall, секции контейнеров помечаются
+  неприменимыми (ADR-0024).
   Триггеры: «инвентаризация», «снять снимок сервера», «что у меня на сервере», «обновить inventory»,
   «scan server», «inventory drift», «refresh inventory».
   НЕ для изменений на сервере (это cleanup-existing-server и др.); НЕ для аудита безопасности
@@ -22,8 +27,13 @@ inventory и выделяю drift'ы между документацией и р
 <context>
 Что предполагается:
 - SSH-доступ к серверу настроен (агентский ключ, BatchMode=yes работает)
-- Docker установлен и работает на сервере
 - Структура `inventory/hosts/<host>/` существует или будет создана при первом запуске
+
+**Docker НЕ обязателен (ADR-0024).** Нативный VPS без Docker снимается полностью — по
+systemd, портам, nginx, TLS, firewall, cron. Тип хоста объявляет `host_kind` в `meta.txt`:
+`docker` (демон отвечает) / `native` (Docker не установлен) / `docker-down` (CLI есть,
+демон молчит). От типа зависят verify на Шаге 2 и содержание документов на Шаге 4 —
+разбор всех трёх в `references/snapshot-contents.md`.
 
 Что НЕ предполагается:
 - Mock-сервер или dry-run — скилл нужен для реального снимка реальности
@@ -35,11 +45,8 @@ inventory и выделяю drift'ы между документацией и р
 <goals>
 После выполнения:
 - Snapshot создан в `inventory/hosts/<host>/snapshots/YYYY-MM-DD/`
-- Snapshot содержит все ожидаемые файлы (containers, networks, volumes, host-resources,
-  crontab, nginx-sites, tls-certs, host-scripts-content, host-env-redacted, cron-d-content,
-  systemd-enabled, systemd-timers, host-services, watchers, compose-files,
-  containers-inspect.json, health-flags) — проверяется по непустоте ключевых, не по
-  суммарному размеру
+- Snapshot содержит все ожидаемые файлы (состав — `references/snapshot-contents.md`) —
+  проверяется по непустоте ключевых, не по суммарному размеру
 - 9 inventory-документов в `inventory/hosts/<host>/` обновлены или созданы из шаблона
   (`automations.md` — только при наличии хоть одной автоматизации)
 - Drift между inventory и реальностью явно обозначен в `drift-report.md` свежего snapshot
@@ -60,8 +67,6 @@ inventory и выделяю drift'ы между документацией и р
 
 ## Шаг 1. Pre-check
 
-Проверяю предусловия одной командой:
-
 ```bash
 # SSH-доступ
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" 'echo ok' || {
@@ -75,28 +80,44 @@ mkdir -p "$INVENTORY_DIR/hosts/"
 # старше 30 мин (предыдущий скан упал) снимаем как stale.
 LOCK="$INVENTORY_DIR/.scan.lock"
 [ -d "$LOCK" ] && find "$LOCK" -maxdepth 0 -mmin +30 2>/dev/null | grep -q . && {
-  echo "→ лок старше 30 мин — снимаю как зависший (stale)."; rm -rf "$LOCK"; }
+  echo "→ лок старше 30 мин — снимаю как зависший (stale)."
+  rm -f "$LOCK/started_at" 2>/dev/null; rmdir "$LOCK" 2>/dev/null; }
 if mkdir "$LOCK" 2>/dev/null; then
   date -u +%Y-%m-%dT%H:%M:%SZ > "$LOCK/started_at" 2>/dev/null
   echo "→ лок inventory-scan взят: $LOCK"
 else
   echo "СТОП: уже идёт inventory-scan (лок $LOCK, начат $(cat "$LOCK/started_at" 2>/dev/null || echo '?'))."
-  echo "      Дождись его завершения. Если уверен, что скан не идёт — сними лок: rm -rf \"$LOCK\"."
+  echo "      Дождись его завершения. Если уверен, что скан не идёт — сними лок вручную:"
+  echo "      rm -f \"$LOCK/started_at\" && rmdir \"$LOCK\""
   exit 1
 fi
 ```
 
-Если SSH не настроен — стоп, без выдумывания «возможно, ключ ниже». Прошу оператора
-проверить ключ и повторить. **Лок держится до Шага 7** (снимается в конце или при отмене —
-освобождаю `rm -rf "$LOCK"`, чтобы не заблокировать следующий скан).
+> ⚠️ **Снятие лока — две команды подряд, БЕЗ функции и БЕЗ рекурсивного удаления.**
+> Именно так, и вот почему — три причины, все выяснены живым прогоном 2026-07-25:
+>
+> 1. **`rmdir` физически не может снести дерево.** При опечатке в `$LOCK` он просто
+>    откажется (каталог непуст), а рекурсивное удаление снесло бы всё молча.
+> 2. **Замок красной зоны (ADR-0022) блокирует рекурсивное удаление по переменной** —
+>    он не знает, что внутри неё, и обязан считать боевым путём. С прежней формулировкой
+>    Шаги 1 и 7 этого зелёного скилла были невыполнимы в принципе.
+> 3. **Функцию заводить нельзя.** Claude Code исполняет ```bash-блоки скилла **в разных
+>    процессах**, и объявленная в одном блоке функция в другом не существует. Первая
+>    попытка вынести снятие лока в `release_lock()` дала мёртвую ветку: вызов стоял в
+>    Шаге 1, объявление — ниже и в другом блоке, а Шаг 7 звал функцию из третьего.
+>    Обе команды самодостаточны — их можно повторить дословно где угодно.
+>
+> Не «упрощать» ни обратно к рекурсивному удалению, ни вперёд к функции.
+
+SSH не настроен — стоп, без выдумывания «возможно, ключ ниже». Прошу оператора проверить
+ключ и повторить. **Лок держится до Шага 7** (снимается теми же двумя командами в конце
+или при любой отмене, иначе следующий скан заблокирован).
 
 ## Шаг 2. Запуск dump-snapshot.sh
 
 **Каноничное имя папки хоста — из `infra-config.json` `servers[].alias`**, не из
-SSH-аргумента: иначе алиас `selectel` создаст `prod-selectel` вместо записанного
-`prod-82.148.28.22` и раздвоит inventory (находка /retro 2026-06-14). Резолвлю канон и
-передаю в скрипт через env `HOST_DIR` — при расхождении с SSH-target скрипт громко
-предупредит и возьмёт канон:
+SSH-аргумента: иначе алиас раздвоит inventory (грабля в `references/dump-snapshot-quirks.md`).
+Резолвлю канон и передаю в скрипт через env `HOST_DIR`:
 
 ```bash
 INFRA="$(dirname "$INVENTORY_DIR")"
@@ -105,47 +126,33 @@ export HOST_DIR   # пусто → скрипт выведет из SSH-target (
 bash scripts/dump-snapshot.sh "$SSH_HOST" "$SNAPSHOT_DATE" "$INVENTORY_DIR"
 ```
 
-Скрипт собирает (через single-shot SSH с timeout 10c):
-
-- Список и inspect контейнеров (`containers.txt`, `containers-inspect.json`)
-- Список compose-файлов (`compose-files.txt`)
-- Docker-сети и volumes (`networks.txt`, `volumes.txt`)
-- Ресурсы хоста — uptime, память, диск, открытые порты, доступные APT-обновления
-  (`host-resources.txt`)
-- Crontab root (через `sudo -n`) + crontab SSH-пользователя + `/etc/cron.d/*`
-  (`crontab.txt`, `cron-d-content.txt`)
-- nginx-конфиг через `nginx -T` (`nginx-sites.txt`)
-- TLS-сертификаты — **даты валидности** через `openssl x509` (`tls-certs.txt`);
-  главный источник — фактические пути `ssl_certificate` из `nginx -T`, плюс
-  letsencrypt и acme.sh (включая `/root/.acme.sh` через `sudo -n`)
-- Список host-скриптов: `/opt` до 4 уровней без node_modules/venv (`host-scripts-list.txt`);
-  содержимое — верхнеуровневых `/opt/*.sh` (`host-scripts-content.txt`); глубокие
-  IaC-скрипты живут в git, их содержимое в снимок не тянем
-- Хост-сервисы вне Docker: нештатные systemd-юниты с Description/User/ExecStart и
-  состоянием (`host-services.txt`) — источник секции «Хост-сервисы» в `services.md`
-- Структура .env-файлов на хосте (имена переменных, значения redacted)
-  (`host-env-redacted.txt`)
-- Включённые systemd-юниты (`systemd-enabled.txt`)
-- systemd-таймеры оператора — расписание наравне с cron на Ubuntu 24.04 (`systemd-timers.txt`)
-- Скрипты-наблюдатели — долгоживущие процессы inotify/fswatch/watchdog,
-  слушающие события, а не запускаемые по расписанию (`watchers.txt`)
-- Готовая сводка здоровья хоста (`health-flags.txt`) — swap%, disk%, loadavg,
-  exited-контейнеры, OOM-коды 137, число отложенных apt/security-обновлений
-- Метаданные снимка (`meta.txt`)
+Что именно собирается в каждую секцию снимка — `references/snapshot-contents.md`
+(таблица «файл → что внутри»). Читать её нужно на Шаге 4, когда заполняешь документы.
 
 **Verify по СОДЕРЖАНИЮ, не по суммарному размеру.** Малый сервер даёт снимок <1 МБ — это
-норма, а не сбой (порог «≥1 МБ» давал false-negative на валидном снимке 324 КБ — находка
-/retro). Проверяю непустоту ключевых файлов и парсинг JSON:
+норма. Набор ключевых файлов зависит от типа хоста (ADR-0024): на нативном требовать
+непустой `containers.txt` бессмысленно — там законная заглушка `NOT_APPLICABLE`.
 
 ```bash
 SNAPSHOT_DIR="$INVENTORY_DIR/hosts/$HOST_DIR/snapshots/$SNAPSHOT_DATE"
 ok=1
-for f in containers.txt networks.txt host-resources.txt; do
+HOST_KIND=$(grep '^host_kind:' "$SNAPSHOT_DIR/meta.txt" | awk '{print $2}')
+
+# Общие для любого хоста: ресурсы, systemd-сервисы, firewall.
+# МАССИВ, а не строка: zsh (оболочка macOS по умолчанию) не дробит `$VAR` на слова,
+# и `for f in $KEY_FILES` даёт ОДНУ итерацию со слипшимися именами — валидный снимок
+# объявляется битым. Проверено живым прогоном 2026-07-25 на zsh 5.9.
+KEY_FILES=(host-resources.txt host-services.txt firewall.txt)
+# Контейнерные — только там, где Docker реально работает
+[ "$HOST_KIND" = "docker" ] && KEY_FILES+=(containers.txt networks.txt)
+
+for f in "${KEY_FILES[@]}"; do
   [ -s "$SNAPSHOT_DIR/$f" ] || { echo "ОШИБКА: пустой ключевой файл $f"; ok=0; }
 done
 jq -e . "$SNAPSHOT_DIR/containers-inspect.json" >/dev/null 2>&1 \
   || { echo "ОШИБКА: containers-inspect.json не парсится"; ok=0; }
 [ "$ok" = 1 ] || { echo "ОШИБКА: snapshot неполный"; exit 1; }
+echo "Снимок валиден (host_kind=$HOST_KIND)"
 ```
 
 Где `$HOST_DIR` = канон из `infra-config.json` (`prod-<ip>` для удалённых или
@@ -153,8 +160,8 @@ jq -e . "$SNAPSHOT_DIR/containers-inspect.json" >/dev/null 2>&1 \
 
 ## Шаг 3. Сравнение с существующим inventory
 
-Две независимые оси сравнения — **не смешивать** (находка /retro: их смешение даёт
-«мнимый drift», когда снимок просто старее обновлённого inventory):
+Две независимые оси сравнения — **не смешивать** (их смешение даёт «мнимый drift», когда
+снимок просто старее обновлённого inventory):
 
 **Ось A — что изменилось на сервере** (снимок-к-снимку, стабильный источник
 `containers-inspect.json`, НЕ grep по рукописному `services.md`):
@@ -168,8 +175,7 @@ diff <(jq -r '.[].Name' "$PREV/containers-inspect.json" 2>/dev/null | sed 's#^/#
 
 **Ось B — что не задокументировано** (реальность ↔ `services.md`). `services.md` ведёт
 контейнеры **таблицей** `| имя | … |`, поэтому проверяю присутствие каждого имени как
-ячейки, а не паттерном `container_name:` (его в формате нет — давал ложный drift на все
-контейнеры):
+ячейки, а не паттерном `container_name:`:
 
 ```bash
 for name in $(jq -r '.[].Name' "$SNAPSHOT_DIR/containers-inspect.json" | sed 's#^/##'); do
@@ -201,6 +207,41 @@ jq -r '.[] | .Name + "\t" + (.Config.Labels["com.docker.compose.project.working_
 Каждая находка — в секцию `## Хлам` drift-отчёта с предложением сноса. Сам не удаляю
 (Green Zone + C.7) — решает оператор.
 
+**Чек «дрейф IaC»** (репозиторий конфигураций `$INFRA/services/` ↔ сервер) — вторая
+секция отчёта. Прежние чеки сравнивают inventory с реальностью; между репозиторием и
+сервером дрейф не ловил никто, и он растёт в обе стороны.
+
+```bash
+# 1. vhost: что включено на сервере vs что записано в репозитории
+ssh "$HOST" 'ls /etc/nginx/sites-enabled/' | sed 's/\.conf$//' | sort > /tmp/nginx-server.txt
+ls "$INFRA/services/nginx/sites-available/" | sed 's/\.conf$//' | sort > /tmp/nginx-repo.txt
+comm -23 /tmp/nginx-server.txt /tmp/nginx-repo.txt   # работает, но НЕ в репозитории — опаснее
+comm -13 /tmp/nginx-server.txt /tmp/nginx-repo.txt   # лежит в репозитории, но не включено
+
+# 2. каталоги стеков: порождают ли контейнер или юнит
+for d in "$INFRA"/services/*/; do
+  n=$(basename "$d")
+  ssh "$HOST" "docker ps -a --format '{{.Names}}' | grep -qx '$n' \
+    || grep -rqs '$n' /etc/systemd/system/ /etc/cron.d/ || echo 'кандидат в мусор: $n'"
+done
+
+# 3. вызовы в деплое, потерявшие адресата
+grep -oE 'redeploy_if_touched "[^"]+"' "$INFRA/deploy.sh" | cut -d'"' -f2 | while read -r p; do
+  [ -d "$INFRA/$p" ] || echo "деплой зовёт несуществующий путь: $p"
+done
+
+# 4. конфигурация, живущая ТОЛЬКО на сервере (обратный дрейф — самый незаметный)
+#    fail2ban, conf.d, systemd-юниты своих сервисов: есть на сервере, нет в репозитории
+```
+
+**Направление важнее факта.** «Лишнее в репозитории» — беспорядок. «Есть на сервере, нет
+в репозитории» — **потеря при восстановлении**: об этом классе говорю оператору первым.
+
+**Кандидат в мусор ≠ мусор.** Каталог без контейнера может обслуживать хост-сервис.
+Прежде чем предлагать снос, ищу упоминания в юнитах, `cron.d` и скриптах; нашёл — пишу
+«используется, не трогать». Боевые примеры обоих правил — в
+`references/dump-snapshot-quirks.md`, раздел про дрейф IaC.
+
 Результат — `$SNAPSHOT_DIR/drift-report.md`. Нет drift'ов — пишу «drift'ов не найдено,
 inventory синхронен». **Мнимый drift** (снимок старее, чем уже обновлённый inventory)
 помечаю отдельно как объяснённый, не как реальное расхождение.
@@ -210,41 +251,31 @@ inventory синхронен». **Мнимый drift** (снимок старе�
 Для каждого документа (services / networks / volumes / databases / domains / cron /
 host-scripts / automations / server):
 
-- Если документ существует — `Edit` правлю изменённые строки, добавляю пометку
+- Документ существует — `Edit` правлю изменённые строки, добавляю пометку
   `<!-- snapshot YYYY-MM-DD: было X, стало Y -->` рядом со старым значением
-- Если не существует — генерирую из `templates/inventory-doc-template.md`,
-  подставляю данные из snapshot
+- Не существует — генерирую из `templates/inventory-doc-template.md`, подставляю данные
+  из snapshot
 
 Никогда не переписываю файл с нуля — теряется история ручных правок и комментариев
 оператора.
 
-**Хост-сервисы вне Docker** (из `host-services.txt`): нештатные systemd-юниты с `User=`
-веду в `services.md` отдельной секцией «Хост-сервисы (не Docker)» — имя, роль, как
-запущен, что трогает. Кейс-обоснование: сервис newsforge (systemd + venv) был невидимкой
-для docker ps и списка compose (incidents/2026-07-10-drop-database-newsbot.md инфры).
+**Какой файл снимка отвечает за какую секцию документа — `references/snapshot-contents.md`.**
+Там же: чем заполнять документы на нативном хосте и на `docker-down`, и как собирается
+витрина `automations.md` (колонки, четыре источника, главная колонка `touches`).
 
-**`automations.md` — сводная витрина (генерируется только при наличии автоматизаций).**
-Это «оглавление всего, что работает само». Колонки: `name | trigger | schedule | runs |
-touches | log | status`. Агрегирую данные из четырёх источников:
-
-- `crontab.txt` / `cron-d-content.txt` → trigger `cron`
-- `systemd-timers.txt` → trigger `systemd-timer` (расписание из `list-timers`, что
-  запускается — из парного `*.service` юнита)
-- `watchers.txt` → trigger `watcher` (событие, не расписание)
-- `host-scripts-content.txt` → чем pipeline/скрипт занят (для колонки `touches`)
-
-Колонка `touches` — главная: что автоматизация трогает (БД из `databases.md`, сервис
-из `services.md`, внешний API — Telegram/RSS/Claude). Это источник связей для сборщика
-дашборда (ADR-0019). Не дублирую `cron.md`/`host-scripts.md` слово в слово —
-агрегирую и осмысляю. Если автоматизаций на сервере нет — документ не создаю.
+**Хост-сервисы вне Docker** (из `host-services.txt`) веду в `services.md` отдельной
+секцией «Хост-сервисы (не Docker)» — имя, роль, как запущен, что трогает. Ожог: сервис на
+systemd + venv был невидимкой для `docker ps` и списка compose, из-за чего его БД
+посчитали бесхозной и удалили.
 
 ## Шаг 5. Honest unknown — везде
 
-Если данные не получены (snapshot-файл пустой, syntax error, поле отсутствует) —
-ставлю `? уточнить` или `нет данных`. **NEVER** выдумываю правдоподобные значения.
+Данные не получены (файл снимка пуст, syntax error, поле отсутствует) — ставлю
+`? уточнить` или `нет данных`. **NEVER** выдумываю правдоподобные значения.
 
 Это правило перекрывает любые другие — лучше пустое поле, чем красивая ложь.
-Подробнее — `references/dump-snapshot-quirks.md` (известные баги и их симптомы).
+Секция подозрительно пуста — до вердикта загляни в `references/dump-snapshot-quirks.md`:
+у половины пустых секций известная причина и обход.
 
 ## Шаг 6. Cleanup старых snapshots
 
@@ -254,8 +285,8 @@ find "$INVENTORY_DIR/hosts/<host>/snapshots/" -mindepth 1 -maxdepth 1 -type d \
   | sort -r | tail -n +$((RETENTION_SNAPSHOTS+1)) | xargs -r rm -rf
 ```
 
-Сортировка по имени (snapshots датированы), не по `-mtime` — `find -mtime +N` округляет
-вниз до целых дней (типичная грабля при чистке временных файлов).
+Сортировка по имени (snapshots датированы), не по `-mtime`: `find -mtime +N` округляет
+вниз до целых дней.
 
 ## Шаг 7. Отчёт оператору
 
@@ -274,79 +305,17 @@ find "$INVENTORY_DIR/hosts/<host>/snapshots/" -mindepth 1 -maxdepth 1 -type d \
 Освобождаю конкурентный лок (взят на Шаге 1) — иначе следующий скан упрётся в «уже идёт»:
 
 ```bash
-rm -rf "$LOCK"   # $INVENTORY_DIR/.scan.lock — снять в конце ИЛИ при любой отмене/ошибке
+# Те же две команды, что в Шаге 1 — самодостаточные, функцию заводить нельзя
+# (блоки скилла исполняются в разных процессах).
+rm -f "$LOCK/started_at" 2>/dev/null; rmdir "$LOCK" 2>/dev/null
 ```
-
-# Failed Attempts (граблекейс)
-
-- **«root-crontab выглядит пустым»** — ИСПРАВЛЕНО (скан Bronto 2026-07-10). Симптом:
-  секция «crontab root» пуста, хотя у root есть задания (автопродление acme.sh).
-  Причина: `crontab -l` без sudo читает crontab SSH-пользователя. Лечение: root через
-  `sudo -n crontab -l` + отдельная секция для crontab SSH-пользователя.
-- **«host-скрипты IaC-раскладки не видны»** — ИСПРАВЛЕНО (2026-07-10). Симптом:
-  `host-scripts-*` пустые, хотя скрипты есть. Причина: glob только `/opt/*.sh`, а
-  скрипты живут в `/opt/infra/scripts/**`. Лечение: `find /opt -maxdepth 4` с
-  исключением node_modules/venv/.git; содержимое глубоких не тянем (они в git).
-- **«TLS не найден, хотя сайт отвечает по HTTPS»** — ИСПРАВЛЕНО (2026-07-10). Симптом:
-  tls-certs.txt пуст при живом 443. Причина: сертификаты в нестандартном месте
-  (`/etc/nginx/ssl/`), acme.sh у root. Лечение: главный источник — пути
-  `ssl_certificate` из `nginx -T`; `/root/.acme.sh` через `sudo -n`.
-- **«хост-сервис вне Docker — невидимка»** — ИСПРАВЛЕНО (2026-07-10, кейс newsforge).
-  Симптом: работающий сервис отсутствует и в docker ps, и в compose-списке, и в
-  inventory. Лечение: новый сбор `host-services.txt` (нештатные systemd-юниты с
-  Description/User/ExecStart) + секция «Хост-сервисы» в services.md.
-- **«tls-certs.txt syntax error»** — известный баг dump-snapshot v1, в v2 исправлен
-  через `set +e` вокруг openssl-вызова. Симптом: tls-certs.txt пустой или содержит
-  «openssl: unknown option». Лечение: убедиться, что используется bundled
-  `scripts/dump-snapshot.sh` (v2), а не старый из `~/scripts/`.
-- **«SSH-alias из ~/.ssh/config не работает в bash sandbox»** — sandbox запускает bash
-  без загрузки пользовательской конфигурации SSH. Лечение: использовать прямой
-  `user@host` вместо алиаса, ключ через `-i` если нужен явный.
-- **«find -mtime +N округляет вниз»** — `find -mtime +1` найдёт файлы старше **2 дней**,
-  а не 1. Для retention снимков использовать сортировку по имени, не -mtime.
-- **«python-regex редакция не покрывает все паттерны»** — `host-env-redacted.txt`
-  маскирует только `=value`, но в URL вида `postgres://user:pass@host` пароль
-  виден. Лечение: добавлять новые regex-паттерны при обнаружении (см.
-  `references/dump-snapshot-quirks.md`).
-- **«ложный drift на все контейнеры»** — ИСПРАВЛЕНО (находка /retro 2026-06-14). Симптом:
-  Шаг 3 грепал `container_name:` по `services.md`, а тот ведёт контейнеры таблицей
-  `| имя | … |` → diff показывал «20 недокументированных». Лечение: ось A — снимок-к-снимку
-  по `containers-inspect.json`; ось B — таблично-aware проверка имени в `services.md`.
-- **«TLS-expiry не считается на acme.sh-хостах»** — ИСПРАВЛЕНО (находка /retro 2026-06-14).
-  Симптом: `tls-certs.txt` содержал только `ls -la` (даты файлов), хотя description обещает
-  «даты валидности». Причина: openssl бежал только по `/etc/letsencrypt/live`. Лечение:
-  `openssl x509 -enddate` теперь и по `~/.acme.sh/*/fullchain.cer`.
-- **«HOST_DIR из SSH-аргумента раздваивал inventory»** — ИСПРАВЛЕНО (находка /retro
-  2026-06-14). Симптом: алиас `selectel` → папка `prod-selectel` вместо записанной
-  `prod-82.148.28.22`. Лечение: канон из `infra-config.json` `servers[].alias` через env
-  `HOST_DIR`; при расхождении с SSH-target скрипт громко предупреждает и берёт канон.
-- **«verify заваливал валидный малый снимок»** — ИСПРАВЛЕНО (находка /retro 2026-06-14).
-  Симптом: порог «размер ≥1 МБ» — false-negative на снимке 324 КБ. Лечение: проверка
-  непустоты ключевых файлов + парсинг `containers-inspect.json` через jq, не суммарный размер.
-- **«секреты в containers-inspect.json»** — ИСПРАВЛЕНО (redaction v1). Скрипт
-  маскирует env-секреты (`KEY=value` и креды в URL) **до записи на диск** —
-  не полагаясь только на `.gitignore`. Метки в `meta.txt`: `redaction_applied: true`.
-  Подробности — `references/dump-snapshot-quirks.md`. gitleaks по этому файлу больше
-  не должен находить реальных секретов; имена переменных (`*_API_KEY=<REDACTED>`)
-  остаются для аудита.
-
-# Граничные случаи
-
-- **Сервер недоступен (down)** — скилл валит с явной ошибкой ещё на Pre-check, не
-  генерирует пустой snapshot
-- **Disk full на сервере** — некоторые секции snapshot частично собраны, отчёт явно
-  говорит «частичный snapshot, причина: disk full». В drift-report не доверяем
-  частичным данным
-- **Контейнер в restart loop** — попадает в snapshot со статусом `Restarting (N)`,
-  в drift-report помечается отдельно как «требует внимания»
-- **Несколько серверов** — переключаются параметром `SSH_HOST`. Не запускать
-  одновременно (нет locking) — снимки будут вперемешку
-- **Локальный режим (`SSH_HOST=local`)** — собирает данные с локальной машины через
-  `eval`, не SSH. Полезно для разработки или mock-инфраструктуры
 
 # Bundled resources
 
-- `scripts/dump-snapshot.sh` — основной dump-скрипт (v2, копия из
-  `scripts/inventory/dump-snapshot.sh` проекта-носителя)
-- `templates/inventory-doc-template.md` — общий шаблон inventory-документа
-- `references/dump-snapshot-quirks.md` — известные баги, симптомы, обходы
+| Файл | Что это и когда открывать |
+|---|---|
+| `references/snapshot-contents.md` | **Состав снимка**: какой файл на какой вопрос отвечает, три типа хоста (`docker`/`native`/`docker-down`) и чем заполнять документы на каждом, устройство витрины `automations.md`. Открывать на Шаге 4 и когда секция снимка пуста |
+| `references/dump-snapshot-quirks.md` | **Когда снимок ведёт себя странно**: известные баги, симптомы, обходы, редакция секретов, грабли самой процедуры скана, граничные случаи (сервер down, disk full, restart loop, несколько серверов, `SSH_HOST=local`) |
+| `scripts/dump-snapshot.sh` | основной dump-скрипт (v2, копия из `scripts/inventory/dump-snapshot.sh` проекта-носителя) |
+| `templates/inventory-doc-template.md` | общий шаблон inventory-документа |
+| `tests/test-native-host.sh` | регрессионный тест сбора на хосте без Docker; прогон вручную |

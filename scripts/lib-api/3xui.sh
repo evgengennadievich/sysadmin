@@ -25,7 +25,8 @@
 # Окружение:
 #   - curl 7.x+, jq 1.6+
 #   - Опционально для resolve password из менеджера паролей:
-#     security (macOS Keychain), pass (Unix), bw (Bitwarden CLI), op (1Password CLI)
+#     security (macOS Keychain), pass (Unix), bw (Bitwarden CLI), op (1Password CLI),
+#     keepassxc-cli (KeePassXC)
 #
 # Возвращаемые коды:
 #   0   — успех
@@ -55,6 +56,7 @@ _3XUI_AUTH_MODE=""        # "" | "cookie" | "bearer"
 _3XUI_BEARER_TOKEN=""     # активный Bearer-токен (не логируется)
 _3XUI_CSRF_TOKEN=""       # активный CSRF-токен (переиспользуется на чувствительных эндпоинтах)
 _3XUI_PANEL_VERSION=""    # "legacy" (≤v2.x) | "v3+" (с CSRF) — выясняется в api_login
+_3XUI_API_VARIANT=""      # "legacy" (§1–14) | "spa" (§15) — REST-вариант, детект после логина (ADR-0020)
 
 # ─── Утилиты ──────────────────────────────────────────────────────────────────
 _3xui_die() {
@@ -76,6 +78,11 @@ _3xui_require() {
 #   pass:<путь>                  — Unix pass(1)
 #   bw:<id или имя>              — Bitwarden CLI bw(1) (требует bw unlock и BW_SESSION)
 #   op:<vault/item/field>        — 1Password CLI op(1) (требует op signin)
+#   keepassxc:<заголовок записи> — KeePassXC через keepassxc-cli(1). База и разблокировка
+#                                  берутся из ENV: KEEPASSXC_DB=/путь/к.kdbx (обязательно),
+#                                  KEEPASSXC_PASSWORD=<мастер-пароль> (подаётся по stdin),
+#                                  KEEPASSXC_KEYFILE=<ключ-файл> (опционально). Секреты БД
+#                                  не логируются.
 #   plain:<значение>             — литерал (для отладки, НЕ для продакшна)
 #   env:<имя_переменной>         — взять из ENV (например, env:PANEL_PASSWORD)
 _3xui_resolve_password() {
@@ -100,6 +107,23 @@ _3xui_resolve_password() {
             _3xui_require op
             op read "op://$value" 2>/dev/null
             ;;
+        keepassxc)
+            _3xui_require keepassxc-cli
+            local kdbx="${KEEPASSXC_DB:-}"
+            if [ -z "$kdbx" ]; then
+                _3xui_die "keepassxc: не задан путь к базе (ENV KEEPASSXC_DB=/путь/к.kdbx)"
+                return 1
+            fi
+            # Мастер-пароль подаётся по stdin (не в аргументах — не светится в ps).
+            # -q подавляет prompt-текст, -a Password печатает только атрибут пароля.
+            if [ -n "${KEEPASSXC_KEYFILE:-}" ]; then
+                printf '%s' "${KEEPASSXC_PASSWORD:-}" \
+                    | keepassxc-cli show -q -a Password -k "$KEEPASSXC_KEYFILE" "$kdbx" "$value" 2>/dev/null
+            else
+                printf '%s' "${KEEPASSXC_PASSWORD:-}" \
+                    | keepassxc-cli show -q -a Password "$kdbx" "$value" 2>/dev/null
+            fi
+            ;;
         env)
             printf '%s' "${!value:-}"
             ;;
@@ -107,7 +131,7 @@ _3xui_resolve_password() {
             printf '%s' "$value"
             ;;
         *)
-            _3xui_die "Неизвестная схема password-ref: '$scheme'. Поддерживается: keychain, pass, bw, op, env, plain."
+            _3xui_die "Неизвестная схема password-ref: '$scheme'. Поддерживается: keychain, pass, bw, op, keepassxc, env, plain."
             return 1
             ;;
     esac
@@ -124,6 +148,12 @@ _3xui_build_base_url() {
     else
         echo "https://${domain}:${port}/${web_path}"
     fi
+}
+
+# URL-энкод значения для вставки в path (например, email клиента в SPA clients/del/{email}).
+# Фронтенд SPA-панели делает encodeURIComponent — повторяем через jq @uri.
+_3xui_urlencode() {
+    printf '%s' "$1" | jq -sRr @uri
 }
 
 # Парсинг аргументов длинных опций.
@@ -190,7 +220,8 @@ api_login() {
         _3XUI_AUTH_MODE="bearer"
         _3XUI_COOKIE_JAR=""   # cookie не нужен
         trap 'api_logout 2>/dev/null || true' EXIT INT TERM
-        _3xui_log "Login OK (bearer mode)"
+        _3xui_detect_api_variant
+        _3xui_log "Login OK (bearer mode, variant=${_3XUI_API_VARIANT})"
         return 0
     fi
 
@@ -222,12 +253,15 @@ api_login() {
             2>/dev/null
     )" || login_html=""
 
-    # Попытка №1: CSRF в HTML-мете <meta name="csrf-token" content="...">
+    # Попытка №1: CSRF в HTML-мете <meta name="csrf-token" content="...">.
+    # `|| true` обязателен: скрипты скилла работают под `set -euo pipefail`, а на SPA-сборке
+    # GET /login отдаёт пустое тело (CSRF берётся через /csrf-token ниже). grep-без-совпадения
+    # под pipefail = exit 1 → без `|| true` роняет весь вызывающий скрипт ещё до fallback.
     _3XUI_CSRF_TOKEN="$(
         printf '%s' "$login_html" \
             | grep -oE '<meta[^>]+name="csrf-token"[^>]+content="[^"]+"' \
             | sed -E 's/.*content="([^"]+)".*/\1/' \
-            | head -n1
+            | head -n1 || true
     )"
 
     # Попытка №2: отдельный endpoint /csrf-token (v3.0.x)
@@ -273,7 +307,7 @@ api_login() {
     }
     local http_code response
     http_code="$(echo "$raw" | grep "__HTTP_CODE__" | sed 's/.*__HTTP_CODE__//')"
-    response="$(echo "$raw" | grep -v "__HTTP_CODE__")"
+    response="$(echo "$raw" | grep -v "__HTTP_CODE__" || true)"
 
     # HTTP 403 = CSRF-middleware отбила запрос.
     # Это два сценария:
@@ -318,7 +352,7 @@ api_login() {
             return 1
         }
         http_code="$(echo "$raw" | grep "__HTTP_CODE__" | sed 's/.*__HTTP_CODE__//')"
-        response="$(echo "$raw" | grep -v "__HTTP_CODE__")"
+        response="$(echo "$raw" | grep -v "__HTTP_CODE__" || true)"
     fi
 
     if [ "$http_code" != "200" ]; then
@@ -335,7 +369,8 @@ api_login() {
         return 1
     fi
 
-    _3xui_log "Login OK (cookie mode, panel=${_3XUI_PANEL_VERSION})"
+    _3xui_detect_api_variant
+    _3xui_log "Login OK (cookie mode, panel=${_3XUI_PANEL_VERSION}, variant=${_3XUI_API_VARIANT})"
     return 0
 }
 
@@ -361,6 +396,7 @@ api_call() {
         case "$1" in
             --json-body) json_body="$2"; shift 2 ;;
             --form) form_args+=("-d" "$2"); shift 2 ;;
+            --form-enc) form_args+=("--data-urlencode" "$2"); shift 2 ;;
             *) _3xui_die "Неизвестный аргумент api_call: $1"; return 1 ;;
         esac
     done
@@ -414,8 +450,8 @@ api_call() {
         }
 
         # Извлекаем HTTP-код
-        http_code="$(echo "$response" | grep "__HTTP_CODE__" | sed 's/__HTTP_CODE__//')"
-        response="$(echo "$response" | grep -v "__HTTP_CODE__")"
+        http_code="$(echo "$response" | grep "__HTTP_CODE__" | sed 's/__HTTP_CODE__//' || true)"
+        response="$(echo "$response" | grep -v "__HTTP_CODE__" || true)"
 
         if [ "$http_code" = "200" ]; then
             break
@@ -476,10 +512,30 @@ api_call() {
     return 0
 }
 
+# ─── Вариант API: legacy (§1–14) vs SPA-сборка 3.4.x+ (§15) — ADR-0020 ─────────
+# ⚠️ SPA-ветки ниже РЕВЕРС-ИНЖИНИРЕНЫ с живой панели 3.4.2 (2026-07-14) и НЕ прогнаны
+# автотестами. Проверять на реальной панели перед доверием (режим сисадмина, не /dev).
+# Legacy-путь оставлен как был.
+
+# _3xui_detect_api_variant — определить вариант панели ПОСЛЕ успешного логина.
+# Эвристика (§15.1): у SPA-сборки работает server/getConfigJson; у legacy его нет (404).
+_3xui_detect_api_variant() {
+    if api_call GET "/panel/api/server/getConfigJson" >/dev/null 2>&1; then
+        _3XUI_API_VARIANT="spa"
+    else
+        _3XUI_API_VARIANT="legacy"
+    fi
+    _3xui_log "API variant detected: ${_3XUI_API_VARIANT}"
+}
+
 # api_restart_xray — обязательный шаг после CRUD-операций
 api_restart_xray() {
-    _3xui_log "Restart Xray service"
-    api_call POST "/panel/api/inbounds/restartXrayService"
+    _3xui_log "Restart Xray service (variant=${_3XUI_API_VARIANT:-legacy})"
+    if [ "$_3XUI_API_VARIANT" = "spa" ]; then
+        api_call POST "/panel/api/server/restartXrayService"
+    else
+        api_call POST "/panel/api/inbounds/restartXrayService"
+    fi
 }
 
 # api_server_status — статус сервера/панели (для smoke-check)
@@ -489,18 +545,167 @@ api_server_status() {
 
 # api_get_xray_config — текущий xray-конфиг (для редактирования outbounds/routing)
 api_get_xray_config() {
-    api_call GET "/panel/api/inbounds/getXrayConfig"
+    if [ "$_3XUI_API_VARIANT" = "spa" ]; then
+        api_call GET "/panel/api/server/getConfigJson"
+    else
+        api_call GET "/panel/api/inbounds/getXrayConfig"
+    fi
 }
 
 # api_update_xray_config "<json>" — обновить xray-конфиг (outbounds + routing)
 api_update_xray_config() {
     local config_json="$1"
-    api_call POST "/panel/api/inbounds/updateXrayConfig" --json-body "$config_json"
+    if [ "$_3XUI_API_VARIANT" = "spa" ]; then
+        # SPA (§15.3): тело FORM (xraySetting=<json-строка> + outboundTestUrl); и ОБЯЗАТЕЛЬНО
+        # вычистить .inbounds до служебного api — иначе вход из БД дублируется в шаблоне и
+        # xray падает 'existing tag found'. Пользовательские входы придут из БД сами.
+        local stripped
+        stripped="$(printf '%s' "$config_json" | jq -c '.inbounds=[.inbounds[]?|select(.tag=="api")]' 2>/dev/null)"
+        # Fail-closed: если strip не удался (битый JSON) — НЕ откатываемся на неочищенный
+        # конфиг (это ровно та беда, ради которой strip и делается: дубль тега → xray падает
+        # 'existing tag found'). Лучше явная ошибка, чем молча уронить xray.
+        if [ -z "$stripped" ] || [ "$stripped" = "null" ]; then
+            _3xui_die "api_update_xray_config: не удалось вычистить .inbounds (некорректный JSON конфига?). Запись отменена — риск 'existing tag found'."
+            return 1
+        fi
+        local leftover
+        leftover="$(printf '%s' "$stripped" | jq '[.inbounds[]?|select(.tag!="api")]|length' 2>/dev/null)"
+        if [ "${leftover:-1}" != "0" ]; then
+            _3xui_die "api_update_xray_config: после strip в .inbounds остались пользовательские входы — запись отменена (риск дубля тега)."
+            return 1
+        fi
+        api_call POST "/panel/api/xray/update" \
+            --form-enc "xraySetting=${stripped}" \
+            --form-enc "outboundTestUrl=${_3XUI_OUTBOUND_TEST_URL:-https://www.google.com/gen_204}"
+    else
+        api_call POST "/panel/api/inbounds/updateXrayConfig" --json-body "$config_json"
+    fi
 }
 
-# api_list_inbounds — список inbound-ов
+# api_add_client INBOUND_ID EMAIL [FLOW] [TOTAL_GB] [EXPIRY_MS] [LIMIT_IP] [UUID]
+# Добавить клиента к входу. Модель данных разная (§15.3):
+#   SPA    → POST clients/add {client:{...},inboundIds:[id]}. UUID генерит ПАНЕЛЬ — реальный
+#            брать потом из inbounds/get/{id}, НЕ из ответа и НЕ передавать свой.
+#   legacy → POST inbounds/addClient {id, settings:"{clients:[{id:uuid,...}]}"} (UUID нужен свой).
+api_add_client() {
+    local inbound_id="$1" email="$2" flow="${3:-}" total_gb="${4:-0}" expiry="${5:-0}" limit_ip="${6:-0}" uuid="${7:-}"
+    [ -z "$inbound_id" ] && _3xui_die "api_add_client: нужен INBOUND_ID" && return 2
+    [ -z "$email" ] && _3xui_die "api_add_client: нужен EMAIL" && return 2
+    if [ "$_3XUI_API_VARIANT" = "spa" ]; then
+        local body
+        body="$(jq -nc --arg e "$email" --arg f "$flow" \
+            --argjson g "$total_gb" --argjson x "$expiry" --argjson l "$limit_ip" --argjson id "$inbound_id" \
+            '{client:({email:$e,enable:true,totalGB:$g,expiryTime:$x,limitIp:$l} + (if $f=="" then {} else {flow:$f} end)), inboundIds:[$id]}')"
+        api_call POST "/panel/api/clients/add" --json-body "$body"
+    else
+        [ -z "$uuid" ] && uuid="$(api_gen_uuid)"
+        local settings body
+        settings="$(jq -nc --arg u "$uuid" --arg e "$email" --arg f "$flow" \
+            --argjson g "$total_gb" --argjson x "$expiry" --argjson l "$limit_ip" \
+            '{clients:[{id:$u,email:$e,flow:$f,enable:true,totalGB:$g,expiryTime:$x,limitIp:$l}]}')"
+        body="$(jq -nc --argjson id "$inbound_id" --arg s "$settings" '{id:$id,settings:$s}')"
+        api_call POST "/panel/api/inbounds/addClient" --json-body "$body"
+    fi
+}
+
+# api_get_inbound INBOUND_ID — прочитать один вход (работает на обоих вариантах).
+# ⚠️ Формат .obj.settings РАЗНЫЙ: на SPA — native-ОБЪЕКТ, на legacy — JSON-СТРОКА.
+# Потребитель, разбирающий клиентов, ОБЯЗАН нормализовать:
+#   (.obj.settings | if type=="string" then fromjson else . end)
+# Готовые хелперы ниже (api_get_client_uuid) это уже делают — используй их, не парси вручную.
+api_get_inbound() {
+    local inbound_id="$1"
+    [ -z "$inbound_id" ] && _3xui_die "api_get_inbound: нужен INBOUND_ID" && return 2
+    api_call GET "/panel/api/inbounds/get/${inbound_id}"
+}
+
+# api_get_client_uuid INBOUND_ID EMAIL — вернуть реальный UUID клиента по email.
+# На SPA UUID генерит панель (в ответе clients/add его НЕТ) — забрать можно только так.
+# Нормализует settings (объект|строка), поэтому безопасен на обоих вариантах.
+api_get_client_uuid() {
+    local inbound_id="$1" email="$2"
+    [ -z "$inbound_id" ] && _3xui_die "api_get_client_uuid: нужен INBOUND_ID" && return 2
+    [ -z "$email" ] && _3xui_die "api_get_client_uuid: нужен EMAIL" && return 2
+    api_get_inbound "$inbound_id" \
+        | jq -r --arg e "$email" \
+            '(.obj.settings | if type=="string" then fromjson else . end)
+             | .clients[]? | select(.email==$e) | .id' 2>/dev/null \
+        | head -n1
+}
+
+# api_del_client EMAIL [INBOUND_ID] [UUID] [KEEP_TRAFFIC]
+# Удалить клиента. Модель удаления РАЗНАЯ (проверено на живой SPA 3.4.2):
+#   SPA    → POST clients/del/{EMAIL}[?keepTraffic=1]. Ключ — EMAIL (НЕ uuid, НЕ числовой id!).
+#            Клиент — отдельная email-ключевая сущность (таблицы clients/client_inbounds).
+#   legacy → POST inbounds/{INBOUND_ID}/delClient/{UUID}. Ключ — UUID (внутри inbound.settings).
+# На legacy, если UUID не передан, но передан INBOUND_ID — резолвим UUID по email.
+# KEEP_TRAFFIC="keep" → сохранить статистику трафика клиента (только SPA).
+api_del_client() {
+    local email="$1" inbound_id="${2:-}" uuid="${3:-}" keep="${4:-}"
+    [ -z "$email" ] && _3xui_die "api_del_client: нужен EMAIL" && return 2
+    if [ "$_3XUI_API_VARIANT" = "spa" ]; then
+        local ep="/panel/api/clients/del/$(_3xui_urlencode "$email")"
+        [ "$keep" = "keep" ] && ep="${ep}?keepTraffic=1"
+        api_call POST "$ep"
+    else
+        [ -z "$inbound_id" ] && _3xui_die "api_del_client (legacy): нужен INBOUND_ID" && return 2
+        if [ -z "$uuid" ]; then
+            uuid="$(api_get_client_uuid "$inbound_id" "$email")"
+        fi
+        [ -z "$uuid" ] && _3xui_die "api_del_client (legacy): не удалось определить UUID клиента '$email'" && return 1
+        api_call POST "/panel/api/inbounds/${inbound_id}/delClient/${uuid}"
+    fi
+}
+
+# api_list_inbounds — список inbound-ов (работает на обоих вариантах)
 api_list_inbounds() {
     api_call GET "/panel/api/inbounds/list"
+}
+
+# api_add_inbound INBOUND_JSON — создать вход. Возвращает ответ {success,obj:{id,tag,port,...}}.
+# INBOUND_JSON — объект с полями remark,port,protocol,listen,enable,expiryTime и
+# settings/streamSettings/sniffing как JSON-СТРОКАМИ (как строит create-vless-inbound.sh).
+# Ветвление по варианту (контракт SPA проверен на живой панели 3.4.2, 2026-07-15):
+#   SPA    → form-urlencoded; settings/streamSettings/sniffing уходят строками.
+#   legacy → JSON-тело целиком.
+# ⚠️ tag присваивает ПАНЕЛЬ (формат in-<port>-<network>, напр. in-443-tcp) — брать из
+#    .obj.tag ответа, НЕ выдумывать локально. На SPA клиентов в settings НЕ встраивай —
+#    заводи отдельно через api_add_client (клиент — email-ключевая сущность).
+api_add_inbound() {
+    local inbound_json="$1"
+    [ -z "$inbound_json" ] && _3xui_die "api_add_inbound: нужен INBOUND_JSON" && return 2
+    if [ "$_3XUI_API_VARIANT" = "spa" ]; then
+        local remark port protocol listen enable expiry settings stream sniffing
+        remark="$(jq -r '.remark // ""' <<<"$inbound_json")"
+        port="$(jq -r '.port' <<<"$inbound_json")"
+        protocol="$(jq -r '.protocol' <<<"$inbound_json")"
+        listen="$(jq -r '.listen // ""' <<<"$inbound_json")"
+        enable="$(jq -r '.enable // true' <<<"$inbound_json")"
+        expiry="$(jq -r '.expiryTime // 0' <<<"$inbound_json")"
+        # settings/streamSettings/sniffing: строкой берём как есть, объект — сериализуем.
+        settings="$(jq -r '.settings | if type=="string" then . else tojson end' <<<"$inbound_json")"
+        stream="$(jq -r '.streamSettings | if type=="string" then . else tojson end' <<<"$inbound_json")"
+        sniffing="$(jq -r '.sniffing | if type=="string" then . else tojson end' <<<"$inbound_json")"
+        api_call POST "/panel/api/inbounds/add" \
+            --form-enc "remark=${remark}" \
+            --form-enc "enable=${enable}" \
+            --form-enc "expiryTime=${expiry}" \
+            --form-enc "listen=${listen}" \
+            --form-enc "port=${port}" \
+            --form-enc "protocol=${protocol}" \
+            --form-enc "settings=${settings}" \
+            --form-enc "streamSettings=${stream}" \
+            --form-enc "sniffing=${sniffing}"
+    else
+        api_call POST "/panel/api/inbounds/add" --json-body "$inbound_json"
+    fi
+}
+
+# api_del_inbound INBOUND_ID — удалить вход (POST inbounds/del/{id}; работает на обоих вариантах).
+api_del_inbound() {
+    local id="$1"
+    [ -z "$id" ] && _3xui_die "api_del_inbound: нужен INBOUND_ID" && return 2
+    api_call POST "/panel/api/inbounds/del/${id}"
 }
 
 # api_logout — очистка cookie/токена и состояния
@@ -519,6 +724,7 @@ api_logout() {
     _3XUI_CSRF_TOKEN=""
     _3XUI_AUTH_MODE=""
     _3XUI_PANEL_VERSION=""
+    _3XUI_API_VARIANT=""
     _3xui_log "Logout OK"
     trap - EXIT INT TERM
 }
@@ -694,6 +900,22 @@ api_store_secret() {
                 "password=$secret" \
                 ${url:+--url="$url"} \
                 ${notes:+"notes=$notes"} >/dev/null
+            ;;
+        keepassxc)
+            _3xui_require keepassxc-cli
+            local kdbx="${KEEPASSXC_DB:-}"
+            [ -z "$kdbx" ] && _3xui_die "keepassxc: не задан KEEPASSXC_DB" && return 1
+            # stdin: строка1 = мастер-пароль БД, строка2 = пароль записи (для флага -p).
+            # ВНИМАНИЕ: create-only. Если запись уже есть — keepassxc-cli add вернёт ошибку;
+            # обновление существующей — через keepassxc-cli edit (здесь не делаем).
+            local kf_args=()
+            [ -n "${KEEPASSXC_KEYFILE:-}" ] && kf_args=(-k "$KEEPASSXC_KEYFILE")
+            printf '%s\n%s\n' "${KEEPASSXC_PASSWORD:-}" "$secret" \
+                | keepassxc-cli add "${kf_args[@]}" \
+                    -u "$account" \
+                    ${url:+--url "$url"} \
+                    -p \
+                    "$kdbx" "$service" >/dev/null 2>&1
             ;;
         *)
             _3xui_die "Неизвестный менеджер паролей: $manager"

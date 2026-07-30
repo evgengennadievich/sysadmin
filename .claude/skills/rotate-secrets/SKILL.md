@@ -8,6 +8,7 @@ description: |
   «secret expired», «compromise — ротировать», «сменить токен», «обновить ключ».
   НЕ для первичной настройки секретов (setup-secrets-vault); НЕ для удаления секрета без замены.
 allowed-tools: Bash, Read, Edit, Write
+disable-model-invocation: true   # меняет боевую систему — только по явной команде оператора (ADR-0027)
 ---
 
 <role>
@@ -123,8 +124,17 @@ printf "ALTER USER <role> WITH PASSWORD '%s';\n" "$NEW" | \
 # 4. Подменить во всех .env — пароль через stdin удалённого шелла, не в argv sed:
 #    (полный паттерн с awk/ENVIRON — в scripts/rotate-db-password.sh, шаг 3)
 
-# 5. Restart всех потребителей (минимальный downtime)
-for compose_dir in $CONSUMER_DIRS; do
+# 5. Restart всех потребителей (минимальный downtime).
+#    СПИСОК — МАССИВОМ, не строкой. zsh (оболочка macOS по умолчанию) не дробит `$VAR`
+#    на слова: `for d in $CONSUMER_DIRS` даёт ОДНУ итерацию со склеенными путями,
+#    на сервере `cd /opt/a /opt/b` падает с «too many arguments», `&&` обрывается —
+#    и ни один потребитель не перезапускается. Пароль в БД уже сменён, сервисы держат
+#    старый → отказ до ручного вмешательства. Найдено живым прогоном 2026-07-25.
+#    Плейсхолдеры — в КАВЫЧКАХ и без угловых скобок: `<` это редирект, и запись
+#    вида (/opt/apps/<имя>) — синтаксическая ошибка в обеих оболочках. Блок упал бы
+#    целиком на шаге 5, то есть уже ПОСЛЕ смены пароля в БД (грабля 2026-07-25).
+CONSUMER_DIRS=("/opt/apps/СЕРВИС-1" "/opt/apps/СЕРВИС-2")   # заполнить фактическими путями
+for compose_dir in "${CONSUMER_DIRS[@]}"; do
     ssh "$SERVER" "cd $compose_dir && docker compose restart"
 done
 

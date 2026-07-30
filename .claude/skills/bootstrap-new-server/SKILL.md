@@ -9,6 +9,7 @@ description: |
   НЕ для приведения хаоса в порядок (для этого — cleanup-existing-server); НЕ для серверов
   с существующими Docker/nginx/configs — это другой жанр.
 allowed-tools: Bash, Read, Edit, Write
+disable-model-invocation: true   # меняет боевую систему — только по явной команде оператора (ADR-0027)
 ---
 
 <role>
@@ -226,6 +227,15 @@ ssh $ADMIN_USER@$SERVER_IP -p $SSH_PORT "ls -la $INFRA_DIR && cd $INFRA_DIR && g
 Должны быть: `.gitignore`, `decisions/`, `incidents/`, `runbooks/`, `inventory/`, один первичный коммит.
 Плюс `gitleaks version` отвечает (скрипт ставит git из apt и gitleaks бинарником с GitHub,
 если их нет — минимальная Ubuntu 24.04 идёт без git, боевой кейс bronto 2026-07-09).
+
+## Шаг 5.5: Приёмка — пройти чек-лист
+
+Прежде чем объявлять сервер настроенным, прохожу
+[`references/post-bootstrap-checklist.md`](references/post-bootstrap-checklist.md) —
+проверка живым действием, а не по факту «скрипт отработал»: SSH пускает по ключу и НЕ
+пускает root, firewall режет закрытые порты, fail2ban реально банит, Docker поднимает
+контейнер, git-репозиторий инициализирован. **Хотя бы один FAIL — bootstrap не закончен**,
+и это говорится оператору прямо, а не заминается.
 
 ## Шаг 6: Дальнейшие шаги
 

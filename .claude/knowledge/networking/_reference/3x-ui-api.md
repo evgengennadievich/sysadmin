@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-05-28
+last_researched: 2026-07-15
 ttl_days: 60
 sources_checked:
   - https://www.postman.com/hsanaei/3x-ui/documentation/q1l5l0u/3x-ui
@@ -30,6 +30,11 @@ REST API панели 3X-UI — **основной путь** взаимодей
 
 Читают: все четыре скилла VPN-блока, персона при свободных вопросах
 «можешь сделать X через API».
+
+> ⚠️ **Свежие сборки 3X-UI — это SPA-приложение с ДРУГИМ API** (наблюдалось на MHSanaei/3x-ui
+> `3.4.2`, 2026-07). Старые эндпоинты §6–7 (`getXrayConfig` / `updateXrayConfig` / `addClient`)
+> на ней возвращают **404**. Прежде чем работать — определи вариант панели. Карта различий,
+> форматы тел и грабли — **§15**. Решение о поддержке двух вариантов — **ADR-0020**.
 
 ---
 
@@ -814,6 +819,96 @@ systemctl status x-ui | grep "active (running)" || echo "FAIL"
 - `3x-ui-panel.md` — операционные грабли панели, перезапуск Xray,
   бэкап SQLite.
 - `client-apps.md` — какие subscription-форматы какие клиенты понимают.
+
+---
+
+## 15. ВАРИАНТ «SPA-сборка» (3.4.x+): ДРУГОЙ API — сначала определи вариант
+
+⚠️ **Свежие сборки 3X-UI (наблюдалось на MHSanaei/3x-ui `3.4.2`, 2026-07) — это
+одностраничное веб-приложение (SPA) с REST API, который ОТЛИЧАЕТСЯ от §1–14.** Старые
+`getXrayConfig` / `updateXrayConfig` / `addClient` возвращают **404**, клиенты стали
+отдельной сущностью, часть тел — form, часть — JSON. Скилл ДОЛЖЕН определить вариант до работы.
+
+> **Источник:** реверс с живой панели 3.4.2 (AIOW, 2026-07-14) — греп JS-бандла (`assets/index-*.js`
+> + чанки) + проба эндпоинтов авторизованной сессией. Postman-коллекция автора описывает СТАРЫЙ вариант.
+
+### 15.1 Как отличить SPA-сборку
+- `GET /{WEB_PATH}/panel/xray` → HTML c `<script src=".../assets/index-*.js">` (SPA), не серверный шаблон.
+- `GET /panel/api/inbounds/getXrayConfig` → **404**; при этом работает `GET /panel/api/server/getConfigJson`.
+- **Вход по API требует заголовок `Host: <домен панели>`** — стук на `127.0.0.1` без него → **403**
+  (проверка Host). Локальную проверку делать через `curl --resolve домен:порт:127.0.0.1`.
+- `fork-check` по строке `MHSanaei/3x-ui` в бинаре НЕ различает варианты (SPA-сборка тоже её содержит) —
+  полагаться на пробу эндпоинтов, не на версию/автора.
+
+### 15.2 Карта эндпоинтов (что поменялось)
+
+| Задача | Старый (§1–14) | SPA-сборка 3.4.x | Тело запроса |
+|---|---|---|---|
+| Читать xray-конфиг | `GET inbounds/getXrayConfig` | `GET server/getConfigJson` | — |
+| Писать outbounds/routing | `POST inbounds/updateXrayConfig` | `POST xray/update` | **form**: `xraySetting=<json-строка>&outboundTestUrl=<url>` |
+| Рестарт xray | `POST inbounds/restartXrayService` | `POST server/restartXrayService` | — |
+| Добавить вход | `POST inbounds/add` | `POST inbounds/add` (путь тот же) | **form**: `remark`,`port`,`protocol`,`settings`,`streamSettings`,`sniffing`,`allocate` |
+| Список входов | `GET inbounds/list` | `GET inbounds/list` (работает) ИЛИ `list/slim` | — |
+| Прочитать один вход | `GET inbounds/get/{id}` | `GET inbounds/get/{id}` (путь тот же) | — ⚠️ `.obj.settings` на SPA — **ОБЪЕКТ**, на legacy — **строка** (см. §15.3 п.7) |
+| Добавить клиента | внутри входа (`addClient`) | `POST clients/add` | **JSON** `{client:{...},inboundIds:[id]}` — UUID генерит панель |
+| Удалить клиента | `inbounds/{id}/delClient/{uuid}` | `POST clients/del/{EMAIL}[?keepTraffic=1]` | — ⚠️ ключ **EMAIL** (НЕ uuid, НЕ числовой id!) |
+| Обновить клиента | `updateClient/{uuid}` | `POST clients/update/{EMAIL}` | **JSON** |
+| Клиенты (bulk) | — | `clients/bulkCreate`, `clients/bulkDel` `{emails:[],keepTraffic}`, `clients/bulkAttach`/`bulkDetach` `{emails:[],inboundIds:[]}`, `clients/bulkEnable`/`bulkDisable` `{emails,enable}`, `clients/delOrphans`, `clients/delDepleted` | **JSON**, ключ везде **email** |
+| Настройки | `POST server/status` | `GET setting/all`, `POST setting/update`, `getDefaultJsonConfig` | — |
+
+Прочие семейства из бандла: `xray/*` (`routeTest`,`testOutbounds`,`outbound-subs`,`balancer*`,`warp/*`,`nord/*`),
+`nodes/*`, `hosts/*`, `clients/groups/*`, `clients/onlines`, `clients/get/{email}`, `clients/list/paged`, `clients/export`/`import`.
+
+> **Клиент на SPA — ОТДЕЛЬНАЯ email-ключевая сущность** (таблицы БД `clients`, `client_inbounds`
+> junction, `client_traffics`), а не запись внутри `inbound.settings.clients` как в legacy. Уникальный
+> ключ — `email` (`idx_clients_email` UNIQUE). Отсюда весь клиентский CRUD на SPA адресуется по email.
+>
+> **Swagger/OpenAPI встроен:** маршрут `/{WEB_PATH}/panel/api-docs` (бандл `vendor-swagger`) — авторитетный
+> справочник эндпоинтов этой сборки; реальные вызовы фронта — в JS-чанке `useClients-*.js` (греп по бандлу).
+
+### 15.3 Грабли SPA-сборки (проверено на живой панели)
+
+1. **`getConfigJson` отдаёт СКЛЕЕННЫЙ конфиг** (шаблон + входы из БД). Записать его целиком
+   обратно через `xray/update` → вход из БД дублируется в шаблоне → xray падает в цикле
+   `existing tag found: in-443-tcp` (exit 23). **Перед записью ВСЕГДА вычищай `.inbounds` до
+   одного служебного `api`** — пользовательские входы приходят из БД сами.
+2. **`xray/update` — тело FORM.** `xraySetting` — это JSON-конфиг **строкой** в form-поле
+   (`--data-urlencode "xraySetting=$CFG"`). JSON-тело → `unexpected end of JSON input`.
+3. **`clients/add` — тело JSON, обёртка `{client:{...},inboundIds:[N]}`.** Плоский `{email:...}`
+   → «email is required»; form-тело → «invalid character 'e'». **UUID генерит панель** — свой в
+   теле игнорируется, реальный брать из `inbounds/get/{id}` после создания.
+4. **Клиент — отдельная сущность и переживает удаление входа** → становится «сиротой», повторный
+   `clients/add` с тем же email → «email already in use». Чистить `POST clients/delOrphans`.
+5. **Reality-донор проверять сквозным подключением**, не только TLS-тестом: `www.microsoft.com`
+   прошёл `openssl s_client -tls1_3 -alpn h2`, но как Reality-цель НЕ работает (`REALITY: handshake
+   did not complete`, клиент видит EOF). Рабочие — `www.google.com`, `www.infomaniak.com`.
+6. `success:true` слепо не доверять — verify функционально (§12.4), логика та же.
+7. **`inbounds/get/{id}`: `.obj.settings` на SPA — native-ОБЪЕКТ, на legacy — JSON-СТРОКА.**
+   Безусловный `fromjson` на SPA падает. Всегда нормализовать: `(.obj.settings | if type=="string"
+   then fromjson else . end)`. Враппер `api_get_inbound`/`api_get_client_uuid` в хелпере это уже делают.
+8. **Удаление клиента на SPA — по EMAIL** (`clients/del/{email}`), НЕ по uuid и НЕ по числовому id.
+   Проверено эмпирически: `clients/del/{uuid}` и `clients/del/{числовой-id}` дают `success:false`
+   «client not found», а `clients/del/{email}` → `success:true`. Ключ — email (см. §15.2).
+9. **UUID нового клиента генерит панель** (свой в теле `clients/add` игнорируется). В ответе `clients/add`
+   его нет — забирать перечитыванием `inbounds/get/{id}` по email (`api_get_client_uuid`). Отдать наружу
+   выдуманный UUID = клиентский конфиг не подключится.
+10. **Дефолтный outbound = ПЕРВЫЙ в массиве `.outbounds`** — у живого конфига может НЕ быть явного
+    default-правила в `routing.rules` (весь нематченный трафик идёт на `outbounds[0]`). При правке
+    routing/outbounds НЕ менять порядок (или добавить явное default-правило), иначе молча сменится egress.
+11. **Round-trip асимметричен:** читаем merged-конфиг (`getConfigJson` = шаблон + входы из БД), пишем в
+    template (`xray/update` со strip `.inbounds` до `api`). `.outbounds`/`.routing` идут как есть — если
+    SPA нормализует порядок outbounds при отдаче, обратная запись может закрепить его в шаблоне (см. п.10).
+
+### 15.4 Что это значит для скиллов
+**Обновлено 2026-07-15 (живая проверка B1 на AIOW 3.4.2):** хелпер `scripts/lib-api/3xui.sh` **уже
+variant-aware** — `api_login`/`api_call` детектят SPA (проба `getConfigJson`), а `api_get_xray_config`,
+`api_update_xray_config` (form + strip `.inbounds`), `api_restart_xray`, `api_add_client`,
+`api_get_inbound`, `api_get_client_uuid`, `api_del_client` (email) работают на живой SPA-панели.
+Схема `keepassxc` в `_3xui_resolve_password` добавлена. Скрипты `configure-vpn-routing`
+(`add-clients`, `setup-routing`, `add-outbound-from-vless`) переведены на врапперы.
+**Ещё не подтверждено на живой панели:** `api_add_inbound` (SPA `inbounds/add` form) и
+`create-vless-inbound.sh` под SPA — проверяются отдельно перед доверием.
+Решение о поддержке двух вариантов — **ADR-0020**.
 
 ---
 

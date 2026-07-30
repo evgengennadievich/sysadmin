@@ -10,6 +10,7 @@ description: |
   «новый провайдер», «сменить хостинг».
   НЕ для bootstrap (это bootstrap-new-server); НЕ для приведения хаоса в порядок (cleanup-existing-server).
 allowed-tools: Bash, Read, Edit, Write
+disable-model-invocation: true   # меняет боевую систему — только по явной команде оператора (ADR-0027)
 ---
 
 <role>
@@ -49,7 +50,7 @@ pre-migration checklist обязателен, rollback готов в любой 
 
 Большинство шагов миграции — Yellow Zone (брифинг + «ок»). Но две категории операций —
 **Red Zone** (4-шаговая процедура ASSESS → PROPOSE → EXECUTE → VERIFY с type-to-confirm,
-канон — в персоне и `references/trust-zones.md`):
+канон — в персоне и `.claude/agents/references/trust-zones.md`):
 
 1. **`rsync --delete` на целевой сервер** — стирает на приёмнике всё, чего нет на
    источнике. Перепутанные местами хосты = необратимое уничтожение боевого сервера
@@ -150,98 +151,19 @@ backup-restore) — каждая такая операция дополните�
 
 ## Шаг 3. Стратегия-специфичная процедура
 
-### 3.1 Backup-Restore (наиболее частый случай)
+Пошаговые команды всех четырёх стратегий — в `references/strategies-tradeoffs.md`
+(применимость, плюсы, минусы, setup, cutover, rollback по каждой). Здесь не дублирую:
+открываю справочник на нужной секции и иду по ней.
 
-Применимо: маленькие БД (<100GB), приемлемый downtime 10-30 мин, минимум setup.
+| Стратегия | Когда берём | Что критично помнить здесь |
+|---|---|---|
+| **backup-restore** | БД < 100 ГБ, простой 10–30 мин приемлем, минимум настройки | распаковка архива поверх `/` — 🔴 Red Zone (см. «Зоны риска») |
+| **rsync-incremental** | средний объём, есть несколько дней на параллельную работу | КАЖДЫЙ прогон с `--delete` — 🔴 Red Zone, отдельный type-to-confirm |
+| **live** (логическая репликация PG) | простой критичен, стек только PostgreSQL или PG + Redis | дожидаться `state='streaming'` и нулевого lag ДО переключения DNS |
+| **blue-green** | нулевой простой критичен, бюджет тянет двойную стоимость | старый (blue) держим 1–2 недели, откат = один `nginx -s reload` |
 
-```bash
-# 1. На старом — полный логический дамп
-ssh "$OLD_SERVER" 'docker exec postgres pg_dumpall | gzip > /backup/full.sql.gz'
-
-# 2. tar volumes (уделить внимание правам владельца — postgres uid 999)
-ssh "$OLD_SERVER" 'tar czf /backup/docker-volumes.tar.gz /var/lib/docker/volumes/'
-
-# 3. scp на новый сервер
-ssh "$OLD_SERVER" 'scp /backup/*.gz '"$NEW_SERVER"':/tmp/'
-
-# 4. На новом — восстановить compose, разархивировать, поднять
-# 🔴 RED ZONE: tar xzf ... -C / перезаписывает файлы целевой системы поверх корня.
-#    Перед запуском — 4-шаговая процедура с type-to-confirm (см. «Зоны риска» выше).
-ssh "$NEW_SERVER" 'cd /opt/<service> && git pull && tar xzf /tmp/docker-volumes.tar.gz -C /'
-ssh "$NEW_SERVER" 'cd /opt/<service> && docker compose up -d postgres'
-ssh "$NEW_SERVER" 'gunzip < /tmp/full.sql.gz | docker exec -i postgres psql -U postgres'
-ssh "$NEW_SERVER" 'cd /opt/<service> && docker compose up -d'
-
-# 5. Smoke-test через health-check скилл
-# 6. DNS switch (TTL уже снижен заранее за 24-48 ч)
-```
-
-См. `scripts/02-rsync-incremental.sh` для аналога с rsync.
-
-### 3.2 Rsync-Incremental
-
-Применимо: средний объём данных, есть несколько дней на параллельную работу.
-
-🔴 **RED ZONE на каждом `--delete`:** прогоны дня 2 и cutover стирают на приёмнике
-всё, чего нет на источнике. Каждый запуск с `--delete` — через 4-шаговую процедуру
-с type-to-confirm (см. «Зоны риска» выше); в брифинге — оба хоста и что будет удалено
-на приёмнике.
-
-```bash
-# День 1 — первый полный rsync (старый сервис ещё работает; без --delete)
-rsync -avz --progress /var/lib/docker/volumes/ "$NEW_SERVER":/var/lib/docker/volumes/
-
-# День 2 — повторный rsync (только delta, быстро) — 🔴 RED ZONE (--delete)
-rsync -avz --progress --delete /var/lib/docker/volumes/ "$NEW_SERVER":/var/lib/docker/volumes/
-
-# День 3 — cutover окно — 🔴 RED ZONE (--delete)
-ssh "$OLD_SERVER" 'cd /opt/<service> && docker compose stop'
-rsync -avz --progress --delete /var/lib/docker/volumes/ "$NEW_SERVER":/var/lib/docker/volumes/
-ssh "$NEW_SERVER" 'cd /opt/<service> && docker compose up -d'
-# DNS switch
-```
-
-### 3.3 Live (логическая репликация PostgreSQL)
-
-Применимо: критичный downtime, PostgreSQL-only стек или PG + Redis.
-
-```sql
--- На старом сервере
-ALTER SYSTEM SET wal_level = 'logical';
-ALTER SYSTEM SET max_replication_slots = 10;
-ALTER SYSTEM SET max_wal_senders = 10;
--- restart PG требуется для wal_level
-CREATE PUBLICATION all_tables FOR ALL TABLES;
-```
-
-```sql
--- На новом сервере
-CREATE DATABASE myapp;
-\c myapp
--- Сначала перенести схему через pg_dump --schema-only
-CREATE SUBSCRIPTION sub_myapp
-  CONNECTION 'host=OLD_IP dbname=myapp user=replicator password=...'
-  PUBLICATION all_tables;
-
--- Ждать synchronized
-SELECT * FROM pg_stat_subscription;  -- state должен стать 'streaming'
-```
-
-После синхронизации (delta = 0) — DNS switch, остановить старый, удалить subscription.
-
-### 3.4 Blue-Green
-
-Применимо: нулевой downtime критичен, бюджет позволяет 2x временно.
-
-```
-1. Новый сервер (green) поднят полностью параллельно со старым (blue).
-2. Данные синхронизируются между ними (live или rsync).
-3. nginx/LB перед обоими: weighted 100% blue → 0% green.
-4. Cutover: weighted 0% blue → 100% green (атомарно через nginx -s reload).
-5. Держать blue 1-2 недели как страховку.
-```
-
-См. `references/strategies-tradeoffs.md` для детального сравнения 4 стратегий.
+Дамп PostgreSQL берётся **изнутри контейнера** (`docker exec postgres pg_dumpall`), а не
+клиентом с хоста: версии клиента и сервера обязаны совпадать.
 
 ## Шаг 4. Cutover (`scripts/03-cutover.sh`)
 
@@ -375,104 +297,27 @@ curl -sSf https://<domain>/health
 - После 14 дней: можно отключить у провайдера, репо `compose/конфиги` остаётся как
   холодный архив.
 
-## Примеры
+## Что помню до чтения справки
 
-### Пример 1: миграция трёх ботов (rsync-incremental)
+Четыре правила обязаны срабатывать сразу — открывать справочник, чтобы их вспомнить, поздно:
 
-Стек: 3 telegram-бота, общий postgres, ~3GB данных. Downtime 5 мин приемлем.
-Стратегия: rsync-incremental (1 день полный + 1 день delta + cutover).
+- **Направление «откуда → куда» подтверждается живыми доказательствами**, а не памятью.
+  Перепутанные хосты в `rsync --delete` уничтожают боевой сервер одной командой.
+- **Старый сервер не уничтожается** сразу после cutover — минимум сутки, канон 1–2 недели.
+  Это единственный откат, который работает.
+- **TTL снижается за 24–48 часов** до переключения, иначе часть клиентов сутками ходит
+  на старый IP.
+- **Машина оператора — часть миграции.** SSH-туннели, MCP-серверы и деплой-скрипты после
+  cutover молча смотрят на старый сервер; «зелёный» статус там проверяет мёртвую копию.
 
-```bash
-# Пятница вечер: полный rsync
-rsync -avz /var/lib/docker/volumes/ new:/var/lib/docker/volumes/  # ~5 мин
+# Bundled Resources
 
-# Суббота утро: delta rsync — 🔴 RED ZONE (--delete), type-to-confirm перед запуском
-rsync -avz --delete /var/lib/docker/volumes/ new:/var/lib/docker/volumes/  # ~30 сек
-
-# Суббота вечер: cutover окно
-ssh old 'docker compose -f /opt/bot1/docker-compose.yml stop'
-ssh old 'docker compose -f /opt/bot2/docker-compose.yml stop'
-ssh old 'docker compose -f /opt/bot3/docker-compose.yml stop'
-# 🔴 RED ZONE (--delete), type-to-confirm перед запуском
-rsync -avz --delete /var/lib/docker/volumes/ new:/var/lib/docker/volumes/  # ~5 сек delta
-ssh new 'cd /opt/bot1 && docker compose up -d'
-# ... остальные боты
-# DNS switch для каждого домена
-# Verify: каждый бот отвечает на /health
-```
-
-### Пример 2: миграция production-стека с zero downtime (blue-green)
-
-Стек: API + frontend, 50k активных пользователей, downtime недопустим.
-Стратегия: blue-green с logical replication PG.
-
-См. детали в `references/strategies-tradeoffs.md`, секция Blue-Green.
-
-## Failed Attempts
-
-- **`pg_dump` с хоста с другой версией PostgreSQL.** Несовместимость dump'а
-  старой версии с новой. **Решение:** всегда `docker exec postgres pg_dumpall`
-  изнутри контейнера, версия совпадает с восстанавливающим.
-- **rsync без `--link-dest`.** Каждый прогон тратит место под полные дубликаты.
-  **Решение:** `--link-dest=/path/to/previous/snapshot/` для hardlink dedupe.
-- **DNS switch без снижения TTL заранее.** Старые resolvers возвращают старый IP
-  часами или сутками. **Решение:** TTL → 300 сек за 24-48 ч до cutover.
-- **Уничтожить старый сразу после cutover.** Нет fallback при проблеме на новом.
-  **Решение:** держать старый запущенным минимум 24 часа после migration.
-- **Hardcoded IP в JS-bundle или конфиге.** Frontend ходит на старый IP даже
-  после DNS switch. **Решение:** `grep -r "192\." /app/src` перед миграцией,
-  переменные окружения для всех endpoint'ов.
-- **Cron jobs забыли перенести.** Бэкап-скрипт остался только на старом.
-  **Решение:** `crontab -l > /tmp/cron-old.txt && find /etc/cron.d -type f` и
-  скопировать на новый.
-- **Машина оператора продолжает работать со старым сервером.** SSH-туннели, MCP-серверы
-  и деплой-скрипты после cutover молча смотрят на старый IP: «зелёный» health-check MCP
-  проверяет мёртвую копию БД, а правка через него уходит в данные, которые никто не читает;
-  первый деплой падает или, хуже, уезжает на старый сервер. **Решение:** секция «Рабочее
-  место оператора» в Шаге 5 — обязательная часть verify, не опция.
-- **Конфиг на сервере ушёл вперёд git — на новый уехала отставшая версия.** Правки
-  боевого конфига вносили руками (`nano` + `nginx -s reload`) мимо push-to-pull, git
-  их не получил. При клонировании на новый сервер часть боевой конфигурации молча
-  теряется. **Решение:** drift-сверка в pre-migration checklist (Шаг 1, пункт 8) —
-  `diff`/`sha256` боевого конфига против git ДО переноса; расходится → сначала синхрон
-  git с боевой версией (реальное состояние сервера — истина при расхождении). Боевой
-  кейс bronto 2026-07-09: nginx `/comics/`, `/sw.js`, HSTS-правки жили только на сервере.
-- **Пачки SSH-подключений при переносе ловят UFW rate-limit нового сервера.** Миграция
-  гонит десятки `ssh`/`scp`/`rsync` подряд; если на приёмнике `ufw limit` на порту 22
-  (наследие старого bootstrap до фикса) — самобан на 30 сек, соединения рвутся
-  `Connection closed`/`timed out`. **Решение:** на приёмнике `ufw allow 22` (защита —
-  fail2ban, не UFW-лимит; см. bootstrap-new-server); со стороны Mac — SSH-мультиплексор
-  (`ControlMaster auto` / `ControlPersist`) переиспользует одно соединение. Промежуточный
-  обход, если приёмник ещё под лимитом: ProxyJump через другой сервер того же ДЦ.
-- **Docker network subnets конфликтуют.** Оба сервера в одной LAN с одинаковыми
-  внутренними подсетями. **Решение:** `/etc/docker/daemon.json` с явным
-  `default-address-pools` ДО первого `docker compose up`.
-
-## Граничные случаи
-
-- **БД > 100GB.** Backup-restore медленный (часы). Рассмотреть live (логическая
-  репликация) или blue-green.
-- **Stateless app только.** Rsync не нужен — просто copy compose-файла + start
-  на новом + DNS switch.
-- **Сертификаты Let's Encrypt.** На новом сервере acme.sh с нуля (DNS challenge
-  если возможно — не требует доступа к 80 порту до cutover).
-- **acme.sh с DNS API.** Credentials провайдера должны быть на новом сервере
-  до первого `acme.sh --issue`.
-- **WebSocket-соединения.** Разрываются при DNS switch. Решение: client-side
-  reconnect логика + graceful shutdown (`docker stop --time=30`).
-- **Floating/static IP у провайдера.** Если можно перевесить тот же IP с старого
-  на новый — DNS switch не нужен вовсе. Уточнять у провайдера заранее.
-- **PostgreSQL разных версий.** При смене PG 14 → 16 нужен `pg_upgrade` или
-  логическая репликация (она работает между версиями). Простой dump/restore
-  тоже работает между minor версиями.
-
-## Bundled Resources
-
-- `scripts/01-pre-migration-backup.sh` — обязательный backup перед миграцией.
-- `scripts/02-rsync-incremental.sh` — параметризованный rsync с поддержкой
-  `--link-dest`.
-- `scripts/03-cutover.sh` — оркестрирует stop старого + start нового + DNS-switch.
-- `scripts/04-post-migration-verify.sh` — row counts + healthcheck + TLS check.
-- `templates/migration-runbook.md` — шаблон runbook'а для конкретной миграции.
-- `references/strategies-tradeoffs.md` — таблица 4 стратегии × downtime / cost /
-  complexity / data loss risk + развёрнутые примеры.
+| Файл | Что это и когда открывать |
+|---|---|
+| `references/strategies-tradeoffs.md` | **Как выполнять выбранную стратегию**: сводная таблица (downtime / cost / complexity / риск потери данных) и по каждой из четырёх — применимость, плюсы, минусы, setup, cutover, rollback с командами. Открывать на Шаге 3 |
+| `references/pitfalls-and-examples.md` | **Грабли, граничные случаи и два разобранных примера** (миграция трёх ботов через rsync-incremental; production-стек без простоя через blue-green). Открывать при планировании и когда шаг пошёл не так |
+| `scripts/01-pre-migration-backup.sh` | обязательный бэкап перед миграцией — и источника, и цели (Шаг 1) |
+| `scripts/02-rsync-incremental.sh` | параметризованный rsync с поддержкой `--link-dest` |
+| `scripts/03-cutover.sh` | stop старого + start нового + переключение DNS (Шаг 4) |
+| `scripts/04-post-migration-verify.sh` | row counts + healthcheck + проверка TLS (Шаг 5) |
+| `templates/migration-runbook.md` | шаблон runbook'а под конкретную миграцию |
