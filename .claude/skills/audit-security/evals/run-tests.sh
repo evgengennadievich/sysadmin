@@ -176,18 +176,18 @@ cat > "$WORK/domains.md" <<'DOC'
 
 | домен | назначение |
 |-------|------------|
-| korp-podarki.ru | сайт |
-| vpn.korp-podarki.ru | панель |
+| example.com | сайт |
+| vpn.example.com | панель |
 
 Reality-заглушка указывает на www.cloudflare.com, upstream живёт на
-api.de.nurcloud.org. Пакеты тянутся с pypi.org, код лежит на github.com.
+api.upstream-provider.net. Пакеты тянутся с pypi.org, код лежит на github.com.
 DOC
 RC=$(STUB_SUDO=allow run_audit t11 --scope tls --domains-file "$WORK/domains.md")
-expect_row t11 "korp-podarki.ru" UNKNOWN \
+expect_row t11 "example.com" UNKNOWN \
     "домен из таблицы обязан попасть в проверку"
-expect_row t11 "vpn.korp-podarki.ru" UNKNOWN \
+expect_row t11 "vpn.example.com" UNKNOWN \
     "второй домен из таблицы тоже"
-for foreign in github.com pypi.org www.cloudflare.com api.de.nurcloud.org; do
+for foreign in github.com pypi.org www.cloudflare.com api.upstream-provider.net; do
     expect_absent t11 "| $foreign |" \
         "чужой домен из прозы не должен попадать в проверку: это мусор в отчёте и соединение с третьим лицом от имени оператора"
 done
@@ -222,7 +222,7 @@ echo "[12] TLS: источник проверки назван честно"
 cat > "$WORK/domains-src.md" <<'DOC'
 | домен | назначение |
 |-------|------------|
-| vpn.korp-podarki.ru | панель |
+| vpn.example.com | панель |
 DOC
 
 RC=$(STUB_SUDO=allow run_audit t13 --scope tls --domains-file "$WORK/domains-src.md")
