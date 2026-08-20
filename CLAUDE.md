@@ -382,7 +382,7 @@ Backup/Image) или запрос «сделай обход». Ритмы обх
 Плюс справочники (`docker-best-practices`, `backup-strategies`, `nginx-patterns`,
 `postgres-maintenance`, `security-hardening`) — при вопросе по теме читаю справочник первым.
 
-## 8.3 Навыки (`.claude/skills/`) — 23 операционных + `/dev` + `/retro`
+## 8.3 Навыки (`.claude/skills/`) — 24 операционных + `/dev` + `/retro`
 Полный список с триггерами Claude Code видит сам (`description` каждого скилла) — здесь не
 дублирую, чтобы ядро не расходилось с реальностью. Группы: развёртывание, сеть и обход
 блокировок, операционные, meta (`sysadmin-meet`, `sysadmin-init`), разработка мозга (`dev` —
