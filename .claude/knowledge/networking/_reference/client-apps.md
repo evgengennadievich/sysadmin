@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-05-24
+last_researched: 2026-08-26
 ttl_days: 60
 sources_checked:
   - https://sing-box.sagernet.org/clients/
@@ -30,9 +30,14 @@ sources_checked:
   - https://www.happ.su/main/dev-docs/examples-of-links-and-parameters
   - https://www.happ.su/main/dev-docs/ping
   - https://routing.happ.su/
+  - https://www.anti-malware.ru/news/2026-06-24-111332/50465
+  - https://www.anti-malware.ru/news/2026-06-29-111332/50514
+  - https://applecensorship.com/app-store-monitor/app/6746188973
+  - https://amnezia.org/blog/amnezia-shutdown-digest-july-2026-russia
+  - https://itunes.apple.com/search?term=Happ&country=ru&entity=software
 ---
 
-# Клиентские приложения: карта на 2026-05-24
+# Клиентские приложения: карта на 2026-08-26
 <!-- Happ-routing блок (§3.6) добавлен 2026-05-22 по отдельному исследованию -->
 <!-- 2026-05-24: Happ назначен основным рекомендованным клиентом (ADR-0007),
      исправлена аргументация про удаление из RU App Store -->
@@ -86,12 +91,23 @@ sources_checked:
    из RU App Store 27-28 марта 2026.
 
 **Универсальный рецепт (основной — Happ, остальное — альтернативы):**
-- **iOS** — `Happ` (основной) / `Hiddify` / `Karing`. В RU App Store сейчас нет
-  ни Happ, ни Hiddify → для новой установки нужна смена региона App Store. Если
-  какой-то клиент уже установлен — не удалять (переустановить без смены региона
-  не получится).
+- **iOS** — `Happ` (основной) / `Hiddify` / `Karing`. В RU App Store нет ни Happ,
+  ни Hiddify, ни Streisand, ни v2RayTun (проверка через App Store API 26.08.2026) →
+  для новой установки нужна смена региона App Store. Если какой-то клиент уже
+  установлен — не удалять (переустановить без смены региона не получится).
+  **Happ удалялся трижды за 2026:** март; 24.06 (карточка «Proxy Utility Plus»,
+  id6746188973, с 03.07 недоступна во всех регионах); 07.07 (по требованию РКН).
+  Оригинальная карточка **id6504287215 издателя Flyfrog LLC** живёт в US-регионе
+  (v5.6.0, обновление 22.07.2026).
+  ⚠️ **Клоны.** По запросу «Happ» RU App Store выдаёт десяток подделок от посторонних
+  издателей («Happ VPN Official» SPK TECH LTD, «Happ VPN ++» INTRADEI TOV, «Happ plus
+  2026» Qinghai Yanqiao, «Happ VPN» PAUL PARVINDER и т.п.). Настоящий издатель только
+  **Flyfrog LLC**; остальное не ставить, семье объяснять отдельно.
+  Есть в RU App Store на 26.08.2026: **Karing** (1.2.23.2607), **Shadowrocket** (2.2.90,
+  платный), **OneXray** (Yuan Dev LLC, клиент Xray-core, v26.8.4, не проверялся),
+  **sing-box MT** (Metamerism LLC, ядро 1.14.x, издатель и происхождение не проверены).
 - **Android** — `Happ` (основной) / `Hiddify` / `NekoBox` / `SFA` (sing-box
-  официальный) / `v2rayNG` (xray). Happ — Google Play (`com.happproxy`) или APK
+  официальный) / `v2rayNG` (xray; stable 2.2.6 от 05.07.2026, 2.3.x пре-релизы). Happ — Google Play (`com.happproxy`) или APK
   с happ.su; остальные — GitHub Releases / Google Play.
 - **macOS** — `Happ` (скачать с happ.su, основной) / `Hiddify` / `Karing` /
   sing-box CLI как brew-сервис.
@@ -124,19 +140,25 @@ sources_checked:
 | Сентябрь 2024 | Появление `sing-box-vt` (ID 6673731168) от VIRAL TECH, INC. — де-факто продолжение под другим юр-лицом, © nekohasekai |
 | 24 февраля 2025 | Последнее обновление `sing-box-vt` — v1.11.4 (с тех пор не обновлялся) |
 | 27-28 марта 2026 | Массовое удаление VPN-приложений из RU App Store по запросу российских властей: Streisand, v2Box, v2RayTun, Happ |
+| 24 июня 2026 | Happ удалён из RU App Store второй раз (карточка «Proxy Utility Plus»); 29.06 вернулся под новым именем (anti-malware.ru) |
+| 3 июля 2026 | Карточка «Happ - Proxy Utility Plus» (id6746188973) исчезает во всех регионах (applecensorship.com) |
+| 7 июля 2026 | Оригинальный Happ удалён из RU App Store третий раз за год, по требованию РКН (Amnezia digest) |
+| 26 августа 2026 | Проверка App Store API: `sing-box-vt` (id6673731168) отсутствует и в US-регионе, проект мёртв на 1.11.4 |
 
 **Источник по удалениям:** TechCrunch (2024-07-08), TheRegister (2024-09-26),
 9to5Mac (2024-09-28), TechRadar, NovayaGazeta (2026-03-31 — Apple официально
 признала удаление 190 приложений за три года).
 
-### 2.2 Текущее состояние альтернатив на iOS (на 2026-05-15)
+### 2.2 Текущее состояние альтернатив на iOS (на 2026-08-26)
 
 | Клиент | App Store ID | Ядро | Версия ядра | RU App Store |
 |---|---|---|---|---|
-| **Happ** | 6504287215 | Xray-core (по умолч.) + опция sing-box | трекает свежий Xray | Удалён в волне ~28.03.2026; на 2026-05-24 в RU App Store **нет** |
-| **Hiddify Proxy & VPN** | 6596777532 | hiddify-sing-box + Xray | непроверено конкретный тег | На 2026-05-24 в RU App Store **нет** (наблюдение оператора) |
-| **Karing** | 6472431552 | mihomo (clash.meta) + модифицированный sing-box | непроверено | Статус в RU App Store на 2026-05-24 — ❓ уточнить |
-| **sing-box-vt** | 6673731168 | sing-box 1.11.x | 1.11.4 (24.02.2025) | Возможно удалено в волне 27-28.03.2026 — требует прямой проверки |
+| **Happ** | 6504287215 (Flyfrog LLC) | Xray-core (по умолч.) + опция sing-box | трекает свежий Xray | В RU App Store **нет** (удаления 03, 06, 07.2026); в US-регионе v5.6.0 от 22.07.2026. Клоны от других издателей не ставить |
+| **Hiddify Proxy & VPN** | 6596777532 | hiddify-sing-box + Xray | приложение 4.1.1 (05.03.2026) | В RU App Store **нет** (API 26.08.2026); в US v4.0 |
+| **Karing** | 6472431552 | mihomo (clash.meta) + модифицированный sing-box | 1.2.23.2607 stable, 1.2.24 пре-релизы | **Есть** в RU App Store (API 26.08.2026) |
+| **sing-box-vt** | 6673731168 | sing-box 1.11.x | 1.11.4 (24.02.2025) | **Удалён во всех регионах** (RU и US, API 26.08.2026); только уже установленные копии |
+| sing-box MT | 6785326793 | sing-box | 1.14.x (по карточке) | Есть в RU; издатель Metamerism LLC, происхождение не проверено |
+| OneXray | 6745748773 | Xray-core | v26.8.4 | Есть в RU; издатель Yuan Dev LLC, не проверялся |
 | Streisand | 6450534064 | Xray-core | n/a | **УДАЛЕНО** ~28.03.2026 |
 | FoXray | 6448898396 | Xray-core | соответствует Xray | непроверено (под угрозой) |
 | v2RayTun | 6476628951 | Xray-core (версия трекает релизы) | n/a | **УДАЛЕНО** ~28.03.2026 |
