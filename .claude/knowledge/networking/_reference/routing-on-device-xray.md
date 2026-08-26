@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-05-22
+last_researched: 2026-08-26
 ttl_days: 60
 sources_checked:
   - https://xtls.github.io/en/config/routing.html
