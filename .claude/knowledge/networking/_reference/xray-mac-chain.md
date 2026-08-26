@@ -1,13 +1,15 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-05-22
+last_researched: 2026-08-26
 ttl_days: 60
 sources_checked:
   - https://xtls.github.io/config/outbound/sockopt.html#dialerproxy
   - https://github.com/anthropics/claude-code/issues/3387
   - https://www.privoxy.org/user-manual/config.html
   - практический опыт настройки (2026-05-22)
+  - https://github.com/anthropics/claude-code/issues/39862
+  - https://code.claude.com/docs/en/network-config
 ---
 
 # xray chain на macOS: обход белого списка провайдера + свой выход в США
@@ -76,7 +78,11 @@ forward-socks5 / 127.0.0.1:10808 .
 ```
 
 Зачем: Claude Code (undici) НЕ поддерживает SOCKS5 proxy. Только http:// или
-https:// в переменных окружения. GitHub issue #3387 закрыт "not planned".
+https:// в переменных окружения. GitHub issue #3387 закрыт "not planned" 10.12.2025;
+официальная документация network-config подтверждает: SOCKS не поддерживается, штатный
+путь HTTP-форвардер перед SOCKS (ровно эта схема). Отдельно issue #39862 (27.03.2026):
+Claude Code 2.1.83 игнорировал `NO_PROXY` и гнал весь трафик через прокси, исправлено
+24.04.2026; на версиях 2.1.83-2.1.9x proxy-only режим не уважал исключения.
 privoxy слушает :8118 и конвертирует HTTP CONNECT → SOCKS5.
 
 ### 3. launchctl setenv
