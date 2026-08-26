@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-05-17
+last_researched: 2026-08-26
 ttl_days: 60
 sources_checked:
   - https://blog.cloudflare.com/russian-internet-users-are-unable-to-access-the-open-internet/
@@ -19,6 +19,10 @@ sources_checked:
   - https://bunny.net/vs/keycdn/
   - https://www.cdn07.com/en/global-top-50-cdn-providers-analysis
   - https://github.com/XTLS/REALITY/blob/main/README.en.md
+  - https://amnezia.org/blog/amnezia-shutdown-digest-july-2026-russia
+  - https://news.risky.biz/risky-biz-news-russia-blocks-cloudflare-ech-connections/
+  - https://enterno.io/en/articles/cloudflare-in-russia
+  - https://habr.com/ru/articles/1047442/
 ---
 
 # Fronting-стратегии: маскировка под легитимный трафик
@@ -83,6 +87,15 @@ Cloudflare WARP, Reality+fallback, host fronting, uTLS, и опыт иранск
 - 🟡 **Cloudflare-fronting в РФ практически непригоден для трафика >16 KB на
   запрос** = это значит непригоден почти ни для чего, кроме коротких API-вызовов
 
+> ⚠️ **Обновление 2026-08-26.** Полного бана Cloudflare в РФ нет, доступность плавает по
+> домену, оператору и региону. С 05.11.2024 ТСПУ блокирует TLS с расширением **ECH**,
+> которое Cloudflare включает по умолчанию, поэтому сайты за CF периодически недоступны
+> даже без завесы (Risky Biz, The Record). РКН официально **рекомендовал уходить с
+> иностранных CDN** (рекомендация, не запрет; enterno.io). По июньской поведенческой
+> модели ТСПУ крупные CDN (Cloudflare, Akamai, Google) целиком в «подозрительный» список
+> не входят, иначе лёг бы легальный рунет, поэтому CDN-индирекция как приём жива, но
+> 16-КБ завеса на CF остаётся (Habr 1047442, MEDIUM).
+
 **Кому ещё пригоден CF-fronting:**
 - Пользователи из **стран без 16-KB curtain** (любая некроссграничная локация)
 - Корпоративные пользователи внутри РФ, которые попали в whitelist
@@ -119,7 +132,7 @@ Cloudflare-IP — не подаётся.
 | **Fastly** | ❌ | $0.12 | ~100 | ❓ Уточнить | fastly blog (LOW — vendor) |
 | **KeyCDN** | ❌ | $0.04 | ~50 | ❓ Уточнить | bunny.net comparison (MEDIUM) |
 | **Akamai** | ❌ | Enterprise | 360k+ edge | ❓ Не использовался для VPN-fronting | inmotionhosting (LOW) |
-| **AWS CloudFront** | Trial | $0.085 | ~400 | ❓ Уточнить, в РФ-2026 — AWS отозвал многих | cdn07 (MEDIUM) |
+| **AWS CloudFront** | Trial | $0.085 | ~400 | 🔴 Июль 2026: блокировка CloudFront в РФ (совпала с недоступностью EA и Blizzard), РКН причастность отрицает; как fronting для РФ выбывает | Amnezia digest July 2026 (HIGH по симптому) |
 | **ArvanCloud (Iran)** | — | Iran-specific | Iran | ⚠️ Iran-only; в РФ — BGP-маршрут через Beeline (Cyberwarzone: «sanctions evasion pipeline») | cyberwarzone (MEDIUM) |
 | **Alibaba CDN** | ❌ | China-tier | 2800+ (mostly China) | ❓ Не использовался для VPN-fronting на Запад | cdn07 (MEDIUM) |
 
