@@ -1,9 +1,13 @@
 ---
 knowledge_domain: vpn
 layer: meta
-last_researched: 2026-06-15
+last_researched: 2026-08-26
 ttl_days: 365
-sources_checked: []
+sources_checked:
+  - https://hub.xeovo.com/posts/207-hy2-blocking
+  - https://habr.com/ru/articles/1009542/
+  - https://habr.com/ru/articles/1047442/
+  - https://habr.com/ru/articles/1065578/
 ---
 
 # Конфликты источников по VPN/обходу блокировок
@@ -193,6 +197,35 @@ B — в других; или появился HIGH-источник, опров
 
 ---
 
+### КОНФЛИКТ-006: Hysteria2 в РФ на 2026-08 — «работает стабильно» или «QUIC режется целиком»?
+
+**Дата фиксации:** 2026-08-26
+**Где зафиксировано в базе:** `_reference/vpn-protocols.md` §1.8 и §3.4, `_reference/transports.md` §8.3, `_reference/web-and-vpn-coexistence.md` (таблица портов)
+
+**Источник A (вес LOW, вендорский маркетинг):**
+- URL: https://xrayreality.org/hysteria2.html , https://multihop.ru/news/2026-05-30-rabochiy-vpn-2026-hysteria-2
+- Дата публикации: май 2026
+- Цитата: «На большинстве российских ISP в 2026 Salamander даёт лучший результат», «Hysteria 2 пробивает там, где VLESS прячется»
+
+**Источник B (вес MEDIUM, замер провайдера с комментариями пользователей):**
+- URL: https://hub.xeovo.com/posts/207-hy2-blocking
+- Дата публикации: 2026-08-04
+- Цитата: «Seems like RKN is once again blocking every QUIC connection. I've tested Hy2 on multiple LTE networks and ISP's, and it's totally unavailable. VLESS, VMESS still work»; ответ команды: «most likely the only solution is to switch to other protocols»
+
+**В чём расхождение:** A датирован маем и продаёт Hysteria2-серверы; B датирован августом и фиксирует блокировку всего QUIC. Скорее всего, оба верны в своё время: до августа Salamander проходил, 04.08 транспорт закрыли целиком.
+
+**Текущее решение в базе:**
+- [ ] использовали A
+- [x] использовали B (статус «заблокирован с 04.08.2026», masquerade не спасает)
+- [ ] оба указаны как варианты
+- [ ] помечено `? уточнить`
+
+**Что прояснит:** собственный замер с РФ-провайдера (curl --http3 к известному QUIC-серверу и Hysteria2-инбаунду на своём VPS) и повтор через 2-4 недели: QUIC-блокировки в РФ раньше включали волнами и откатывали.
+
+**Дата следующей проверки:** при ближайшем `/refresh-vpn-knowledge LAYER=live`.
+
+---
+
 ## КОНФЛИКТ-00X: жив ли VLESS+Reality под российским DPI на 2026-08
 
 **Заведён:** 2026-08-05 при проверке слоя `_live/` (задача 4Б.2).
@@ -233,6 +266,15 @@ Carnegie Endowment, май 2026 (**HIGH**): современные проток�
   такой инбаунд есть.
 
 **Дата следующей проверки:** при ближайшем `/refresh-vpn-knowledge LAYER=live`.
+
+**Обновление 2026-08-26 (LAYER=reference).** Появились два независимых инженерных разбора
+(Habr 1009542, февраль; Habr 1047442, июнь-август 2026) и подтверждение хостера (тикет
+Timeweb №12068181, 05.06.2026, Habr 1065578): удар 17.02.2026 пришёлся именно по
+**VLESS+Reality поверх голого TCP** на проводных операторах (заморозка после ~16 КБ), с
+июня добавился поведенческий модуль. Это два MEDIUM плюс подтверждение хостера, порог
+ADR-0006 пройден: в `_reference/vpn-protocols.md` §3.4-3.5 статус изменён на «голый TCP
+режется, рабочая связка VLESS+XHTTP+Reality». Сторона A (Carnegie) остаётся верной про
+XHTTP-конфигурации. Конфликт не закрыт: собственного замера оператора всё ещё нет.
 
 ---
 
