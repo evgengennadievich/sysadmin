@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-05-28
+last_researched: 2026-08-26
 last_updated: 2026-05-29
 ttl_days: 60
 sources_checked:
@@ -12,6 +12,7 @@ sources_checked:
   - https://nginx.org/en/docs/http/ngx_http_core_module.html
   - https://nginx.org/en/docs/stream/ngx_stream_ssl_preread_module.html
   - https://github.com/MHSanaei/3x-ui/issues/3901
+  - https://hub.xeovo.com/posts/207-hy2-blocking
 ---
 
 # Сосуществование веб-сайтов и VPN на одном сервере (кто слушает 443)
@@ -154,7 +155,7 @@ API DNS-провайдера, но это отдельная история и �
 | **80/TCP** | nginx | ACME HTTP-01 + редирект `http://` → `https://` |
 | **443/TCP** | nginx | привратник: TLS, по домену/пути раздаёт сайты и XHTTP-VPN внутри |
 | **8443/TCP** (опц.) | Xray Reality напрямую | VPN-инбаунд параллельно nginx |
-| **9443/UDP** (опц.) | Hysteria2 напрямую | VPN-инбаунд по UDP, мимо nginx |
+| **9443/UDP** (опц.) | Hysteria2 напрямую | VPN-инбаунд по UDP, мимо nginx. 3X-UI держит Hysteria2 inbound нативно (issue #3901 закрыт completed 29.05.2026), но с 04.08.2026 QUIC из РФ режется целиком: UDP-дверь имеет смысл только для входа не из РФ (`vpn-protocols.md` §1.8) |
 | **127.0.0.1:разные** | сайты-апстримы, mixed-прокси Xray, боты | внутренние, наружу не торчат |
 
 Снаружи открыты только три «двери» — 80, 443 и опциональные VPN-порты. Всё остальное
