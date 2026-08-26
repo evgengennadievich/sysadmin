@@ -18,7 +18,7 @@
 | Файл | Источники |
 |---|---|
 | `frontline-ru.md` | `site:ntc.party 2026 Russia VPN` + `site:gfw.report Russia` + `site:blog.cloudflare.com Russia` + Mediazona / Meduza / Moscow Times за последние недели |
-| `frontline-cn.md` | `site:gfw.report 2026` + greatfirewallguide.com + USENIX |
+| `frontline-cn.md` | `site:gfw.report 2026` + net4people/bbs + GreatFire + issues Xray-core / sing-box + USENIX. **Читается при каждом прогоне `live` (Шаг 2а), а не только по TTL**; формулы ниже |
 | `frontline-ir.md` | arxiv preprints + Iran censorship reports 2026 |
 | `frontline-by.md` | Carnegie + RFE/RL + CSO Meter Belarus 2026 |
 | `timeline.md` | добавляются новые события из всех `frontline-*` |
@@ -123,6 +123,48 @@
    `/panel/api/inbounds/add`, `/panel/api/inbounds/update`).
 2. Изменения в формате client-объекта (UUID, flow, security fields).
 3. Новые методы (если что-то добавили — обязательно зафиксировать).
+
+## frontline-cn.md (GFW как предвестник для РФ)
+
+**Зачем отдельно:** GFW опережает ТСПУ на 6-12 месяцев (ADR-0006). Файл
+проверяется при каждом прогоне `LAYER=live` по Шагу 2а `SKILL.md`, а не только по
+своему TTL. Цель не «знать про Китай», а получить прогноз: что из нашего стека
+под ударом следующим.
+
+**Что отслеживаем:** новые техники детекции GFW (сигнатуры, поведенческий анализ,
+active probing, работа с UDP и TLS-отпечатками), удары по Xray / Reality / XHTTP /
+sing-box / Hysteria2 / TUIC, контрмеры сообщества (новые транспорты, патчи ядра).
+
+**WebSearch-запросы (быстрый скан, бесплатно):**
+- `site:gfw.report <год>`
+- `site:github.com/net4people/bbs GFW <год>`
+- `GFW blocking Reality XHTTP <год>`
+- `GFW active probing new detection <год>`
+- `site:github.com/XTLS/Xray-core GFW blocked` (issues и discussions)
+- `site:github.com/SagerNet/sing-box GFW`
+- `Great Firewall <год> new censorship technique USENIX FOCI`
+- `site:greatfire.org <год>`
+
+**Tavily research (по подтверждению WebSearch):**
+- `Какие новые техники блокировки и детекции применяет GFW с <last_researched>?
+   Особенно: Reality, XHTTP, sing-box, Hysteria2/TUIC, TLS-fingerprint, active
+   probing, UDP. Что из этого уже повторил ТСПУ в России?`
+
+**Что искать в первую очередь:**
+1. Техника, бьющая по нашему стеку (VLESS+Reality, XHTTP, sing-box у клиентов).
+2. Ответ разработчиков: релиз или обсуждение в Xray-core / sing-box со словами
+   GFW, blocked, 被墙 (китайское «за стеной», так помечают issues о блокировке).
+3. Признаки, что ТСПУ уже повторяет приём: перекрёстный поиск по ntc.party и
+   РФ-источникам с тем же названием техники.
+
+**Перевод находки в прогноз для РФ** (форма записи в Шаге 2а `SKILL.md`): что в
+Китае / что у нас под ударом / горизонт 6-12 мес / что готовить / статус ПРОГНОЗ.
+Горизонт короче только при источнике по РФ, показывающем начало повтора.
+
+**Веса источников по `_meta/sources-registry.md`:** gfw.report, net4people/bbs,
+Xray-core, sing-box это HIGH; GreatFire это MEDIUM; форумы и Telegram LOW.
+Академические работы (USENIX, FOCI) в реестре пока не описаны: при первом
+использовании добавить в `sources-registry.md` §6 с весом и обоснованием.
 
 # Общие правила
 
