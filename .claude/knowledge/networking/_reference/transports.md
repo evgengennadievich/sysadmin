@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-05-17
+last_researched: 2026-08-26
 ttl_days: 60
 sources_checked:
   - https://xtls.github.io/en/config/transport.html
@@ -52,6 +52,12 @@ sources_checked:
   - https://newreleases.io/project/github/XTLS/Xray-core/release/v26.1.23
   - https://newreleases.io/project/github/SagerNet/sing-box/release/v1.7.0
   - https://newreleases.io/project/github/SagerNet/sing-box/release/v1.12.0
+  - https://habr.com/ru/articles/1047442/
+  - https://habr.com/ru/articles/1009542/
+  - https://hub.xeovo.com/posts/207-hy2-blocking
+  - https://github.com/XTLS/Xray-core/discussions/5568
+  - https://github.com/XTLS/Xray-core/discussions/5847
+  - https://github.com/MHSanaei/3x-ui/releases
 ---
 
 # Транспорты Xray/sing-box: карта и выбор
@@ -155,9 +161,9 @@ release-notes на newreleases.io.
 | Issue | Версия | Симптом | Workaround |
 |---|---|---|---|
 | **#4406** | recent Release | Memory leak при использовании xhttp+vless+reality+xPaddingBytes+stats. Issue закрыт как «not planned» | Уменьшить scMaxBufferedPosts, отключить stats; обходное решение не предложено |
-| **#5631** | v26.1.31 | `sessionPlacement: "path"` валит запуск (на Windows — `unsupported session placement: path`) | Не использовать `sessionPlacement: path` |
-| **#5923** | recent | XHTTP+REALITY к **локальному nginx** — `unexpected ccs message`. TCP+REALITY к тому же nginx работает | Использовать удалённый nginx; не локальный |
-| **#6048** | recent | VLESS+XHTTP+REALITY — серверные ошибки `failed to read client hello` | Не определён |
+| **#5631** | v26.1.31 | `sessionPlacement: "path"` валит запуск (на Windows — `unsupported session placement: path`) | **Исправлено**, issue закрыт как completed 02.02.2026; на старых ядрах не использовать `sessionPlacement: path` |
+| **#5923** | v26.x | XHTTP+REALITY к **локальному nginx** — `unexpected ccs message`. TCP+REALITY к тому же nginx работает | Закрыт not planned 13.04.2026, чинить не будут: использовать удалённый nginx, не локальный |
+| **#6048** | v26.x | VLESS+XHTTP+REALITY — серверные ошибки `failed to read client hello` | Закрыт not planned 02.05.2026 без воспроизведения; при таком симптоме первым делом сверять версии ядра на обоих концах (§3.7) |
 | **#6085** | v26.5.3, v26.4.25 | ⚠️ **НЕ подтверждён.** Заявлен `bad certificate` при XHTTP, когда TLS терминирует **сам xray** (`security: tls`, .pem от Let's Encrypt). Закрыт `not_planned` 2026-05-08 с «close as no response» — данных для повтора автор не дал, майнтейнер указал на **сам сертификат**. Схемы «XHTTP за nginx» (`security: none`, TLS держит nginx) не касается. Сверено с первоисточником 2026-08-05 | **Откат версии НЕ нужен** — багом это не подтверждено. Столкнулся в режиме xray-TLS: сверить отпечаток сертификата `xray tls ping <dest>`, при совпадении — прописать его в `pinnedPeerCertSha256` |
 | **#5739** | — | Browser Dialer игнорирует `sessionId` и `seqStr` в `packet-up` | Не используется в продакшне |
 | **#2997** | — | Host header регистрозависим; нельзя добавить header key `"host"` | Использовать `Host` (с большой H) |
@@ -181,6 +187,24 @@ sing-box) **не могут подключаться к XHTTP-серверам**
 
 «XHTTP под активной разработкой, важно чтобы версии Xray на клиенте и сервере
 совпадали — иначе странные глюки или вообще не работает» (Habr 990208).
+
+### 3.8 VLESS Encryption и XMC (2026)
+
+- **VLESS Encryption (`xray vlessenc`).** С января 2026 Xray-core печатает «VLESS without
+  flow is deprecated and being migrated to VLESS with flow» (discussion #5568). Команда
+  `xray vlessenc` выдаёт пару ключей: `decryption` на сервер, `encryption` на клиент;
+  шифрование постквантовое. По обсуждениям #5568 и #5847 транспорты **без TLS/Reality**
+  (XHTTP за CDN, `security: none`) теперь требуют его; при XHTTP+Reality включение
+  считается избыточным, вопрос о `mldsa65` поверх vlessenc без ответа мейнтейнеров.
+  **MEDIUM:** два обсуждения плюс релиз-ноты панели, официальные релиз-ноты Xray v26.x
+  через API пустые. Практика: рабочий пример VLESSENC+XHTTP+CDN+Vision в ответе #5568.
+- **XMC finalmask, breaking change v26.7.28 (28.07.2026).** Неполная маска XMC отвергается
+  при сохранении конфига; 3X-UI 3.6.0 (30.07.2026) это учитывает и сбрасывает только
+  дефектную строку, чтобы один плохой inbound не гасил все. На старых панелях после
+  обновления ядра проверять, что inbound'ы поднялись.
+- **Версии на 2026-08-26:** стабильный v26.3.27, пре-релизы до v26.7.28; панель 3X-UI
+  3.6.0 и 3.7.0 тянут v26.7.28. Для XHTTP-плеча между двумя своими Xray выравнивать
+  версии руками (§3.7).
 
 ---
 
@@ -285,7 +309,7 @@ Xray** — параметры `header` и `seed` мигрированы в но�
 ### 8.2 Известные баги Hysteria2
 
 - **apernet/hysteria #1364:** obfs causes crash в v2.6.1
-- **Xray-core #5712:** feature request на поддержку `hysteria2 obfs (Salamander)`
+- **Xray-core #5712** (закрыт not planned 26.02.2026, Salamander в Xray-core не будет): feature request на поддержку `hysteria2 obfs (Salamander)`
   в Xray-core — означает, что на момент создания issue Xray не поддерживал
   Salamander нативно
 - **3X-UI #3901:** feature request на native UI поддержку Hysteria2 — статус
@@ -299,6 +323,14 @@ Banzaev (Amnezia, HIGH): Hysteria2 — в списке протоколов, **�
 Но: ЛЕТО 2025 — РКН блокирует «неопознанный UDP». Hysteria2 требует **обязательно
 masquerade под легитимный HTTPS** (mode `proxy` с upstream на реальный домен) или
 risk быть отброшенным как «неопознанный UDP».
+
+> ⚠️ **Обновление 2026-08-26.** 04.08.2026 РКН режет QUIC целиком: замер Xeovo на
+> нескольких LTE и проводных ISP, hy2 недоступен полностью при живых VLESS/VMess
+> (MEDIUM). Masquerade не спасает, потому что блокируется транспорт, а не сигнатура.
+> apernet/hysteria продолжает релизы (2.12.2 от 23.08.2026), 3X-UI держит Hysteria2
+> inbound нативно (issue #3901 закрыт completed 29.05.2026), но для входа **из РФ**
+> Hysteria2 на 2026-08 не выбор. Расхождение с маркетингом «работает стабильно»:
+> КОНФЛИКТ-006 в `_meta/conflicts.md`.
 
 ---
 
@@ -472,9 +504,27 @@ HIGH: [XTLS/REALITY README](https://github.com/XTLS/REALITY/blob/main/README.en.
 
 ### 13.6 Рекомендуемая комбинация для РФ-2026
 
+**До февраля 2026** эталоном было:
+
 ```
 VLESS + TCP + REALITY + xtls-rprx-vision + uTLS(chrome или firefox)
 ```
+
+**С 2026-08-26 для трансграничного плеча (клиент в РФ или РФ-сервер → заграничный VPS):**
+
+```
+VLESS + XHTTP + REALITY   (mode: stream-one; при необходимости flow xtls-rprx-vision)
++ XMUX с ограничением параллельных соединений (maxConcurrency, hMaxRequestTimes)
++ uTLS один раз (chrome или firefox) и не менять под заморозкой
+```
+
+Запасной inbound на другом порту: `VLESS + TCP + REALITY + Vision` (быстрый откат, если
+XHTTP споткнётся; см. баги §3.5). Причина смены: с 17.02.2026 голый TCP+Reality режется
+после ~16 КБ на проводных ISP, а с июня 2026 поведенческий модуль ТСПУ ловит залп
+параллельных рукопожатий к одному SNI и профиль «постоянный двунаправленный поток».
+Reality закрывает рукопожатие и активное зондирование, XHTTP закрывает поведение
+соединения; это разные слои, они не конкурируют. Обязательное условие XHTTP: одинаковая
+версия ядра на обоих концах (§3.7). Подробно: `vpn-protocols.md` §3.5.
 
 С dest = `www.microsoft.com` или `github.com` (без CDN в РФ).
 
