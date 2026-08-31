@@ -59,6 +59,29 @@ check pass "echo с текстом команды" "$TMP/ro3.jsonl"
 mk "$TMP/ro4.jsonl" "Bash:cat /etc/systemd/system/app.service | head -20"
 check pass "чтение unit-файла" "$TMP/ro4.jsonl"
 
+echo "[1б] Читающие ФОРМЫ команд, что в остальном меняют инфру (разведка 2026-08-31)"
+# Признак чтения здесь несёт флаг/подкоманда, а не первое слово, поэтому READONLY_LEAD их
+# не ловит. До правки все три останавливали обычную диагностику.
+mk "$TMP/rf1.jsonl" "Bash:crontab -l"
+check pass "crontab -l" "$TMP/rf1.jsonl"
+mk "$TMP/rf2.jsonl" "Bash:sudo crontab -u EvgenGT -l 2>/dev/null"
+check pass "crontab -l с sudo, -u и редиректом" "$TMP/rf2.jsonl"
+mk "$TMP/rf3.jsonl" "Bash:ssh prod-host 'acme.sh --list'"
+check pass "acme.sh --list" "$TMP/rf3.jsonl"
+mk "$TMP/rf4.jsonl" "Bash:ssh prod-host 'certbot certificates'"
+check pass "certbot certificates" "$TMP/rf4.jsonl"
+
+echo "[1в] Изменяющие формы тех же команд — по-прежнему ловим (обратная сторона)"
+# Без этих проверок правка [1б] могла бы тихо отключить ловлю настоящих изменений.
+mk "$TMP/rf5.jsonl" "Bash:ssh prod-host 'crontab /tmp/newcron'"
+check block "crontab устанавливает файл" "$TMP/rf5.jsonl"
+mk "$TMP/rf6.jsonl" "Bash:ssh prod-host 'crontab -r'"
+check block "crontab -r сносит расписание" "$TMP/rf6.jsonl"
+mk "$TMP/rf7.jsonl" "Bash:ssh prod-host 'certbot renew'"
+check block "certbot renew" "$TMP/rf7.jsonl"
+mk "$TMP/rf8.jsonl" "Bash:ssh prod-host 'crontab -l && crontab /tmp/new'"
+check block "цепочка: чтение и следом установка" "$TMP/rf8.jsonl"
+
 echo "[2] Изменение без обновления inventory — останавливаем"
 mk "$TMP/change1.jsonl" "Bash:ssh prod-host 'docker compose up -d academii'"
 check block "docker compose up" "$TMP/change1.jsonl"

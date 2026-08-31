@@ -126,12 +126,36 @@ READONLY_LEAD = re.compile(
     r"^(grep|egrep|fgrep|rg|ag|echo|printf|cat|bat|less|more|head|tail|wc|jq|yq|sort|uniq"
     r"|column|diff|comm|man|which|type|file|stat|basename|dirname)(\s|$)", re.IGNORECASE)
 PREFIX_RE = re.compile(r"^\s*(sudo\s+(-\w+\s+)*)?(\w+=\S+\s+)*", re.IGNORECASE)
+# Читающие ФОРМЫ команд, которые в остальном инфраструктуру меняют. Нужен отдельно от
+# READONLY_LEAD: тот судит по первому слову сегмента, а здесь признак чтения несёт флаг или
+# подкоманда. Разведка 2026-08-31 показала три ложные остановки обычной диагностики:
+# `crontab -l`, `acme.sh --list`, `certbot certificates` — паттерны выше ловят эти команды с
+# ЛЮБЫМ аргументом, тогда как у `ufw`/`systemctl`/`docker` перечислены изменяющие подкоманды
+# и ложных срабатываний нет.
+# Fail-closed по замыслу: неизвестная форма считается изменением. Лишняя остановка стоит
+# реплику, пропуск — расхождение карты с реальностью (уровень C.2). Список пополняется.
+# Якорь ^ обязателен: упоминание команды ВНУТРИ другой (`probe "crontab -l"`, текст в
+# кавычках) под фильтр не попадает и по-прежнему останавливает — это осознанная цена,
+# правило 4 в knowledge/agent-runtime/_reference/building-enforcement.md.
+# Префикс `ssh [флаги] хост ` и открывающая кавычка: команды диагностики агент зовёт НА
+# СЕРВЕРЕ, а не локально, и без этого фильтр лечил бы только половину случаев (поймано
+# собственным тестом при внедрении: `ssh host 'acme.sh --list'` продолжал блокироваться).
+_SSH_LEAD = r"(?:ssh\s+(?:-\w+\s+\S+\s+|-\w+\s+)*\S+\s+)?[\'\"]?"
+READONLY_FORM = re.compile(
+    r"^" + _SSH_LEAD + r"(?:"
+    r"crontab\s+(?:-u\s+\S+\s+)?-l(?:\s|$|[\'\"])"
+    r"|acme\.sh\s+(?:--list|--info|--version)(?:\s|$|[\'\"])"
+    r"|certbot\s+(?:certificates|--version)(?:\s|$|[\'\"])"
+    r")",
+    re.IGNORECASE)
+
+
 
 def changes_infra(cmd):
     """Ищет изменяющую команду посегментно, пропуская read-only обёртки."""
     for seg in re.split(r"\|\||&&|;|\||\n", cmd):
         probe = PREFIX_RE.sub("", seg).strip()
-        if not probe or READONLY_LEAD.match(probe):
+        if not probe or READONLY_LEAD.match(probe) or READONLY_FORM.match(probe):
             continue
         if CHANGE_RE.search(probe):
             return probe
