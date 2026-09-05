@@ -11,7 +11,8 @@
 # Пример:
 #   bash .claude/skills/deploy-service/scripts/rollback.sh my-dashboard a1b2c3d
 #
-# Перед запуском оператор должен подтвердить через type-to-confirm в чате.
+# Перед запуском оператор подтверждает явным «ок» после Yellow-брифинга
+# (type-to-confirm оставлен красной зоне, §6.2 персоны).
 
 set -euo pipefail
 
