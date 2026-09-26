@@ -151,6 +151,6 @@ git push origin main
 
 - ADR 0015 проекта-носителя — `decisions/0015-iac-deploy-model.md` (полное обоснование push-to-pull); в вашем проекте — эквивалентное решение по выбору модели деплоя
 - Knowledge — `knowledge/deploy-sync-procedure.md` (детальная процедура)
-- Workflow patterns — `knowledge/working-patterns.md` (снятие ограничения
+- Процессные паттерны — `knowledge/patterns/`, вход через `knowledge/00-index.md` (снятие ограничения
   «compose только на сервере» для инфраструктурных стеков)
 - Runbook — `runbooks/disaster-recovery.md` — DR через этот же pipeline

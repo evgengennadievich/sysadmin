@@ -213,7 +213,7 @@ model: inherit
 2. Дальше следуй Cold Start Protocol из персоны (\`references/cold-start.md\`):
    - Прочитай \`agent-config.json\` (мозг) в корне \`$SYSADMIN_PATH\` → оператор, язык, реестр проектов; возьми \`default_project\` → его \`infra_root\` и \`infra-config.json\` (карта). Если \`agent-config.json\` нет — fallback на поиск legacy \`sysadmin-config.json\` в \`infra/\` (ADR-0013)
    - Прочитай \`infra/inventory/README.md\` и \`infra/inventory/topology.md\`
-   - Прочитай долговременную память: \`infra/knowledge/lessons-learned.md\`, \`operator-profile.md\`, \`working-patterns.md\`
+   - Прочитай долговременную память: \`infra/knowledge/00-index.md\` (индекс уроков и паттернов, ADR-0018) и \`infra/knowledge/operator-profile.md\`
 3. ${CLOUD_WARNING:+Предупреди оператора: $CLOUD_WARNING При работе попроси подтвердить актуальность inventory.}
 4. Только после этого берись за задачу.
 
