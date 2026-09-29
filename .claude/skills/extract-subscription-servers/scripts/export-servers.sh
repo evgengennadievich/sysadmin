@@ -6,9 +6,13 @@
 #   (б) сохранить JSON в $INFRA/inventory/shared/vpn-subscriptions/<provider>.json
 #       (постоянное хранилище серверов оператора — переживает сессию).
 #
-# vless://-ссылки собираются из нормализованных полей (тип транспорта и security
-# определяют набор query-параметров). Это даёт оператору переносимый артефакт:
-# одну ссылку = один сервер, готов к импорту.
+# Ссылка сервера — ИСХОДНАЯ из подписки (поле `link`), если она есть: пересборка из
+# полей теряет незнакомые парсеру параметры (у Quattro — pcs, mode). Собираем vless://
+# из нормализованных полей только когда исходника нет (формат Xray-JSON). Одна
+# ссылка = один сервер, готов к импорту.
+#
+# JSON: `servers` — только VLESS (договор с /configure-vpn-routing, он строит из них
+# outbound); Hysteria2 и прочее — в `other_servers`, в .txt — все.
 #
 # Использование:
 #   NORMALIZED_JSON=/tmp/servers.json \
@@ -161,12 +165,20 @@ TXT_FILE="${TXT_PATH:-${DEST_DIR}/${PROVIDER_SLUG}-servers.txt}"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # (б) Сохраняем JSON с метаданными.
-echo "$INPUT" | jq --arg provider "$PROVIDER_SLUG" --arg saved_at "$NOW" '{
-    provider: $provider,
-    saved_at: $saved_at,
-    server_count: length,
-    servers: .
-}' > "$JSON_FILE"
+# Договор с /configure-vpn-routing: в `servers` — только то, из чего он умеет строить
+# VLESS-outbound. Hysteria2 (другой протокол, QUIC) кладём рядом, в `other_servers`:
+# в файле и в .txt они есть, но в балансир панели сами не попадут.
+echo "$INPUT" | jq --arg provider "$PROVIDER_SLUG" --arg saved_at "$NOW" '
+    [.[] | select((.protocol // "vless") == "vless")] as $vless
+    | [.[] | select((.protocol // "vless") != "vless")] as $other
+    | {
+        provider: $provider,
+        saved_at: $saved_at,
+        server_count: ($vless | length),
+        servers: $vless
+      }
+    + (if ($other | length) > 0 then {other_servers: $other} else {} end)
+' > "$JSON_FILE"
 
 # (а) Человеко-читаемый .txt.
 {
@@ -183,7 +195,9 @@ echo "$INPUT" | jq --arg provider "$PROVIDER_SLUG" --arg saved_at "$NOW" '{
     echo "================================================================"
 
     # По странам — заголовок + сервера с параметрами и ссылкой.
-    for c in $(echo "$INPUT" | jq -r '[.[].country] | unique | .[]'); do
+    # Через while read, не `for c in $(…)`: страна «?» (не распознана) в for стала бы
+    # шаблоном имени файла и совпала бы с любым однобуквенным файлом в текущей папке.
+    echo "$INPUT" | jq -r '[.[].country] | unique | .[]' | while IFS= read -r c; do
         echo ""
         echo "### Страна: ${c}"
         echo ""
@@ -195,10 +209,15 @@ echo "$INPUT" | jq --arg provider "$PROVIDER_SLUG" --arg saved_at "$NOW" '{
             port="$(echo "$obj" | jq -r '.port // "?"')"
             network="$(echo "$obj" | jq -r '.network // "?"')"
             security="$(echo "$obj" | jq -r '.security // "?"')"
+            proto="$(echo "$obj" | jq -r '.protocol // "vless"')"
             echo "  • [$tag] ${remark}"
             echo "      адрес:     ${host}:${port}"
-            echo "      транспорт: ${network} / ${security}"
-            link="$(build_vless "$obj" 2>/dev/null || true)"
+            echo "      протокол:  ${proto}, транспорт: ${network} / ${security}"
+            # Исходная ссылка — первой: пересборка из полей теряет незнакомые парсеру
+            # параметры (pcs, mode у Quattro). Собираем сами только если исходника нет
+            # (формат Xray-JSON).
+            link="$(echo "$obj" | jq -r '.link // ""')"
+            [ -z "$link" ] && link="$(build_vless "$obj" 2>/dev/null || true)"
             if [ -n "$link" ]; then
                 echo "      ссылка:    ${link}"
             else

@@ -6,6 +6,8 @@
 # ЧЕТЫРЕ формата тела ответа и сам выбирает парсер:
 #   1. base64-encoded список vless://-ссылок   → parse-vless-link.sh
 #   2. plain-text список vless://-ссылок        → parse-vless-link.sh
+#      (в форматах 1/2 hysteria2:// и hy2:// → parse-hysteria2-link.sh, с 2026-09-29;
+#       у каждого объекта — поля `protocol` и `link` — исходная ссылка)
 #   3. Xray-JSON массив профилей (Panterra/Remnawave!) → parse-xray-json.sh
 #   4. sing-box JSON                             → parse-xray-json.sh
 # Именно формат 3 старый скрипт не понимал — отсюда ложный «0 серверов» на
@@ -52,6 +54,7 @@ DEVICE_LOCALE="${DEVICE_LOCALE:-ru}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARSE_LINK="${SCRIPT_DIR}/parse-vless-link.sh"
 PARSE_XRAY="${SCRIPT_DIR}/parse-xray-json.sh"
+PARSE_HY2="${SCRIPT_DIR}/parse-hysteria2-link.sh"
 
 # Выбор начального профиля заголовков.
 if [ "$SUB_CLIENT" = "happ" ] || { [ -z "$SUB_CLIENT" ] && [ -n "$HWID" ]; }; then
@@ -89,10 +92,11 @@ is_stub_response() {
     if echo "$decoded" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
         return 1
     fi
-    if echo "$decoded" | grep -qiE 'app not supported|приложение не поддержив|device limit|лимит устройств'; then
+    # grep -q — только через here-string, не через трубу: см. «ОБРЫВ ТРУБЫ» у decode_response.
+    if grep -qiE 'app not supported|приложение не поддержив|device limit|лимит устройств' <<<"$decoded"; then
         return 0
     fi
-    if echo "$decoded" | grep -qE '(^|@)0\.0\.0\.0(:|$)'; then
+    if grep -qE '(^|@)0\.0\.0\.0(:|$)' <<<"$decoded"; then
         return 0
     fi
     local total real
@@ -106,6 +110,13 @@ is_stub_response() {
 
 # decode_response — base64-decode при необходимости, иначе оставить как есть.
 # JSON-тело (Xray/sing-box) НЕ трогаем — оно не base64.
+#
+# ОБРЫВ ТРУБЫ (поймано 2026-09-29 на подписке Quattro, 255 КБ после раскодирования).
+# `echo "$big" | grep -q X` при `set -o pipefail` ложно отвечает «нет»: grep -q уходит на
+# первом совпадении, echo получает SIGPIPE (код 141), pipefail делает код всей трубы
+# ненулевым. Пока тело влезало в буфер трубы (~64 КБ), echo успевал дописать и ничего не
+# было видно. Итог — «не найдено ни vless://-ссылок» при 325 ссылках. Поэтому проверки
+# с ранним выходом (grep -q, head) — только через here-string `<<<`: трубы нет, рвать нечего.
 decode_response() {
     local raw="$1" decoded=""
     # Если уже JSON — не декодируем.
@@ -114,10 +125,10 @@ decode_response() {
         return
     fi
     # Похоже на base64 (нет ://, только base64-алфавит) → декодируем.
-    if echo "$raw" | grep -qv '://' && echo "$raw" | grep -qE '^[A-Za-z0-9+/=[:space:]]+$'; then
+    if grep -qv '://' <<<"$raw" && grep -qE '^[A-Za-z0-9+/=[:space:]]+$' <<<"$raw"; then
         decoded="$(echo "$raw" | base64 -d 2>/dev/null || echo "$raw" | tr -d '\n\r' | base64 -d 2>/dev/null || echo "")"
     fi
-    if [ -z "$decoded" ] || { ! echo "$decoded" | grep -q '://' && ! echo "$decoded" | jq empty >/dev/null 2>&1; }; then
+    if [ -z "$decoded" ] || { ! grep -q '://' <<<"$decoded" && ! echo "$decoded" | jq empty >/dev/null 2>&1; }; then
         decoded="$raw"
     fi
     printf '%s' "$decoded"
@@ -177,26 +188,34 @@ if echo "$DECODED" | jq -e 'type == "array" or (type == "object" and has("outbou
     exit $?
 fi
 
-# Формат 1/2: тело — список vless://-ссылок (base64 уже раскодирован выше).
-LINKS="$(echo "$DECODED" | grep -oE 'vless://[^[:space:]]+' \
+# Формат 1/2: тело — список ссылок (base64 уже раскодирован выше). Берём vless:// и
+# hysteria2:// (hy2://); прочие схемы (vmess, trojan, ss) молча не выдумываем —
+# они в сводке «пропущено» ниже.
+LINKS="$(grep -oE '(vless|hysteria2|hy2)://[^[:space:]]+' <<<"$DECODED" \
         | grep -vE 'vless://0{8}-0{4}-0{4}-0{4}-0{12}' || true)"
+OTHER_COUNT="$(grep -oE '^[a-z0-9]+://' <<<"$DECODED" | grep -cvE '^(vless|hysteria2|hy2)://' || true)"
+[ "${OTHER_COUNT:-0}" -gt 0 ] && echo "[parse-sub] Пропущено ссылок других протоколов (vmess/trojan/ss…): $OTHER_COUNT" >&2
 
 if [ -z "$LINKS" ]; then
-    echo "ERROR: не найдено ни vless://-ссылок, ни Xray/sing-box JSON в подписке." >&2
+    echo "ERROR: не найдено ни vless:// / hysteria2://-ссылок, ни Xray/sing-box JSON в подписке." >&2
     echo "  (возможно, Clash YAML — нужен другой User-Agent; либо HWID-locked без HWID)" >&2
     echo "  Содержимое (первые 200 байт): $(echo "$DECODED" | head -c 200)" >&2
     exit 1
 fi
 
 LINK_COUNT="$(echo "$LINKS" | wc -l | tr -d ' ')"
-echo "[parse-sub] Формат: список vless:// ($LINK_COUNT шт, профиль: $PROFILE)" >&2
+echo "[parse-sub] Формат: список ссылок ($LINK_COUNT шт, профиль: $PROFILE)" >&2
 
-if [ ! -x "$PARSE_LINK" ]; then
-    echo "ERROR: не найден parse-vless-link.sh рядом ($PARSE_LINK)" >&2
-    exit 1
-fi
+for p in "$PARSE_LINK" "$PARSE_HY2"; do
+    if [ ! -x "$p" ]; then
+        echo "ERROR: не найден разборщик рядом ($p)" >&2
+        exit 1
+    fi
+done
 
-# Парсим каждую ссылку → объекты → массив.
+# Парсим каждую ссылку → объекты → массив. К каждому объекту прикладываем ИСХОДНУЮ
+# ссылку (`link`): пересборка из полей теряет то, чего парсер не знает (у Quattro —
+# pcs, mode=gun), а исходник рабочий по определению. export-servers.sh берёт его первым.
 # parse-vless-link.sh использует поле "type" для транспорта и не проставляет
 # country/network/remark. Приводим к ЕДИНОЙ схеме с parse-xray-json.sh:
 #   • network = type (транспорт);
@@ -205,10 +224,15 @@ fi
 #               не распознали → "?" (страну НЕ выдумываем — правило №1).
 echo "$LINKS" | while IFS= read -r link; do
     [ -z "$link" ] && continue
-    "$PARSE_LINK" "$link" 2>/dev/null || {
-        echo "WARN: пропускаю невалидную ссылку: $link" >&2
+    case "$link" in
+        vless://*) parser="$PARSE_LINK"; proto="vless" ;;
+        *)         parser="$PARSE_HY2";  proto="hysteria2" ;;
+    esac
+    obj="$("$parser" "$link" 2>/dev/null)" || {
+        echo "WARN: пропускаю невалидную ссылку ($proto)" >&2
         continue
     }
+    jq -c --arg link "$link" --arg proto "$proto" '. + {link: $link, protocol: $proto}' <<<"$obj"
 done | jq -s '
     def flag_to_iso($s):
         [ ($s // "") | explode[] | select(. >= 127462 and . <= 127487) | (. - 127397) ]
