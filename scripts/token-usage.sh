@@ -1,5 +1,5 @@
 #!/bin/bash
-# Замер расхода контекста по транскриптам Claude Code (ADR-0039).
+# Замер расхода контекста по транскриптам Claude Code (ADR-0040).
 #   bash scripts/token-usage.sh              — сводка по всем проектам
 #   bash scripts/token-usage.sh detail СЛАГ  — инструменты, повторы и чтения одного проекта
 # Источник: ~/.claude/projects/*/*.jsonl, поле usage; дедупликация по message.id.
