@@ -3,6 +3,11 @@
 # Хук проверяется подачей синтетического stdin — того же формата, что даёт Claude Code.
 
 set -uo pipefail
+
+# Обвязка теста тоже печатает русский текст через python: на чужой кодовой странице
+# (Windows cp1252) она падает и подаёт хуку пустой вход — тест «проваливается» там,
+# где замок исправен. Правило 3д свода замков.
+export PYTHONIOENCODING=utf-8
 HOOK="$(cd "$(dirname "$0")/.." && pwd)/red-zone-guard.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -45,8 +50,11 @@ STALE="$TMP/stale.jsonl"
   done
 } > "$STALE"
 
+# Образец команды красной зоны для случаев, где важна не сама команда, а поведение хука.
+RED_SAMPLE='docker volume rm pgdata-old'
+
 run() { # $1 = команда, $2 = transcript_path (может быть пустым)
-  python3 - "$1" "${2:-}" <<'PY' | bash "$HOOK"
+  python3 - "$1" "${2:-}" <<'PY' | env PYTHONIOENCODING="${HOOK_ENC:-utf-8}" bash "$HOOK"
 import json, sys
 print(json.dumps({
   "session_id": "test-session",
@@ -110,6 +118,37 @@ check deny  "cd в боевой + снос относительного пути
 check deny  "чтение /tmp, снос боевого"                 'ls /tmp; rm -rf /opt/prod'
 check deny  "уборка /tmp и снос тома в одной цепочке"   'rm -rf /tmp/x && docker volume rm pgdata'
 
+echo "[1в] Временный каталог агента: переменная и раскладка Windows"
+# `$TMPDIR` проверялся шаблоном заглавными, а сравнение идёт по нижнему регистру —
+# совпадения не было никогда. На Windows временный каталог агента лежит не в /tmp,
+# а в …/AppData/Local/Temp/…, поэтому исключение там не работало вовсе: замок требовал
+# type-to-confirm за уборку файлов, созданных агентом минуту назад (против ADR-0038).
+check allow "переменная TMPDIR"  'rm -rf "$TMPDIR/scratch"'
+check allow "переменная TEMP"    'rm -rf "$TEMP/claude-run"'
+check allow "msys-форма пути"    'rm -rf /c/users/operator/appdata/local/temp/claude/proj/sess/scratchpad/x'
+check allow "нативная форма"     'rm -rf "C:\Users\operator\AppData\Local\Temp\claude\proj\sess\scratchpad\x"'
+# Контроль: исключение НЕ открывает дорогу боевым путям, каким бы временным путём
+# команда ни начиналась — та же логика, что у /tmp в блоке [1б].
+check deny  "windows-temp + боевой путь" \
+  'rm -rf /c/users/operator/appdata/local/temp/x /opt/prod'
+check deny  "похожий, но не temp путь"   'rm -rf /c/users/operator/documents/archive'
+
+echo "[1г] Границы расширенного исключения (доработка PR #11)"
+# Проба противоположными случаями 19.08.2026 показала четыре прохода. Два открыл сам
+# PR #11 (голое слово вместо переменной), два — выход вверх по дереву, причём для ветки
+# /tmp этот проход жил с самого начала: путь начинался во временном каталоге, а
+# заканчивался в домашнем, и список боевых каталогов такое не ловит.
+check deny  "голое слово temp, не переменная"   'rm -rf temp'
+check deny  "голое слово tmp, не переменная"    'rm -rf tmp'
+check deny  "выход вверх из временного"         'rm -rf "$TMPDIR/../../Documents"'
+check deny  "выход вверх из /tmp в домашний"    'rm -rf /tmp/../Users/operator/Documents'
+check deny  "выход вверх из windows-temp"       'rm -rf /c/users/op/appdata/local/temp/../../documents'
+check deny  "windows-temp с обратными слешами наружу" \
+  'rm -rf "c:\users\op\appdata\local\temp\..\..\..\..\windows\system32"'
+# Контроль: ужесточение не убило само исключение — штатная уборка по-прежнему проходит.
+check allow 'штатная уборка через $TMPDIR'      'rm -rf "$TMPDIR/scratch"'
+check allow "штатная уборка windows-temp"       'rm -rf /c/users/op/appdata/local/temp/claude/p/s/scratchpad/x'
+
 echo "[2] Красная зона без подтверждения блокируется"
 check deny "rm -rf на боевом пути"          'rm -rf /opt/academii/data'
 check deny "rm -fr (переставленные флаги)"  'rm -fr /var/lib/postgresql'
@@ -163,6 +202,28 @@ with open(sys.argv[1], "w", encoding="utf-8") as f:
 PY
   check allow "канонная фраза открывает замок" 'docker volume rm pgdata-old' "$CANON_TR"
 fi
+
+echo "[7] Вердикт доходит и при чужой кодовой странице консоли (правило 3д)"
+# Дефект 26.08.2026: хук печатал ответ через python, а консоль на Windows в cp1252 — python
+# падал на первом же русском символе, хук не печатал НИЧЕГО и выходил с кодом 0. Движок
+# читает это как «возражений нет»: замок молча пропускал ровно то, ради чего поставлен.
+# Лечится строкой `export PYTHONIOENCODING=utf-8` в шапке ХУКА — но проверять её надо
+# отдельным случаем. Своим таким же export (шапка этого файла) тест лечит хук ЗА НЕГО:
+# переменная наследуется дочернему процессу, и убери её завтра из хука — итог останется
+# зелёным, а на Windows замок снова онемеет (проверено откатом хука 28.08.2026: 66/0 на
+# заведомо сломанном). Здесь кодировка навязывается ИМЕННО ХУКУ, перекрывая наследство, —
+# так проверяется его собственная защита, а не защита обвязки.
+HOOK_ENC=cp1252
+check deny  "отказ доходит при cp1252-консоли" "$RED_SAMPLE" "$ASSISTANT_ONLY"
+check allow "безобидное при cp1252 проходит"   'docker ps -a'
+# Текст отказа обязан остаться читаемым, а не выродиться в «?»: проверяем ключевое слово.
+ENC_OUT="$(run "$RED_SAMPLE" "$ASSISTANT_ONLY" 2>/dev/null)"
+if printf '%s' "$ENC_OUT" | grep -q 'КРАСНАЯ ЗОНА'; then
+  PASS=$((PASS+1)); echo "  ✅ русский текст отказа не искажён"
+else
+  FAIL=$((FAIL+1)); echo "  ❌ отказ при cp1252 пуст или искажён"
+fi
+unset HOOK_ENC
 
 echo "─────────────────────────────────────────────────────────"
 printf 'Итог: %d прошло, %d провалено\n' "$PASS" "$FAIL"

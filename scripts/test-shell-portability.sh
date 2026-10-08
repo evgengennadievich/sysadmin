@@ -51,7 +51,7 @@ if git -C "$ROOT" cat-file -e "$HIST_REF^{commit}" 2>/dev/null; then
         path="${spec%%|*}"; needle="${spec#*|}"
         line="$(git -C "$ROOT" show "$HIST_REF:$path" 2>/dev/null | grep -F "$needle" | head -1)"
         if [ -z "$line" ]; then
-            bad "строка «$needle» не найдена в $HIST_REF:$path — тест потерял источник"
+            bad "строка «${needle}» не найдена в $HIST_REF:$path — тест потерял источник"
             continue
         fi
         f="$(fixture "hist-$(basename "$(dirname "$path")").md" "$line")"
@@ -452,7 +452,7 @@ do
     label="${spec%%|*}"; tmp="${spec#*|}"; body="${tmp%|*}"; want="${tmp##*|}"
     f="$(fixture_plain "guard-$(echo "$label" | tr ' ' '-').md" "$body")"
     if bash "$LINTER" --root "$WORK" "$f" >/dev/null 2>&1; then got="пропускать"; else got="ловить"; fi
-    if [ "$got" = "$want" ]; then ok "$label → $want"; else bad "$label: ожидалось «$want», получено «$got»"; fi
+    if [ "$got" = "$want" ]; then ok "$label → $want"; else bad "$label: ожидалось «${want}», получено «${got}»"; fi
 done
 
 # Дубль и ложная тревога при обрезке остатка строки.
