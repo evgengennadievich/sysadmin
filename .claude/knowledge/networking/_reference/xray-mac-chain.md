@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-08-26
+last_researched: 2026-10-27
 ttl_days: 60
 sources_checked:
   - https://xtls.github.io/config/outbound/sockopt.html#dialerproxy
@@ -10,6 +10,8 @@ sources_checked:
   - практический опыт настройки (2026-05-22)
   - https://github.com/anthropics/claude-code/issues/39862
   - https://code.claude.com/docs/en/network-config
+  - https://github.com/SagerNet/sing-box/issues/1562
+  - https://sing-box.sagernet.org/configuration/shared/dial/
 ---
 
 # xray chain на macOS: обход белого списка провайдера + свой выход в США
@@ -45,9 +47,11 @@ api.anthropic.com / интернет
 
 ## Почему именно xray, а не sing-box
 
-sing-box НЕ поддерживает chain VLESS→VLESS через `detour`. Issue закрыт как
-"not planned" (SagerNet/sing-box#1562). Работает только detour с Shadowsocks,
-Trojan или SOCKS.
+Ссылка на SagerNet/sing-box#1562 была ошибочной: это issue «WireGuard stop working after serval hours»
+(закрыт как not planned 16.05.2024), к цепочкам он отношения не имеет. По документации sing-box поле
+`detour` входит в Dial Fields любого outbound, включая VLESS, то есть цепочка VLESS→VLESS в sing-box
+описана штатно; живым тестом у нас она не проверялась. Xray для этой схемы оставлен по практике
+2026-05-22: `sockopt.dialerProxy` проверен именно на ней.
 
 xray поддерживает произвольные chain через `sockopt.dialerProxy` — outbound
 указывает имя другого outbound как транзитный. Работает для любых протоколов.
