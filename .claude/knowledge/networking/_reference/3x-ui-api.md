@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-07-15
+last_researched: 2026-10-27
 ttl_days: 60
 sources_checked:
   - https://www.postman.com/hsanaei/3x-ui/documentation/q1l5l0u/3x-ui
@@ -16,6 +16,19 @@ sources_checked:
   - https://packagist.org/packages/estaheri/3x-ui
   - https://pkg.go.dev/github.com/mhsanaei/3x-ui/v2/xray
   - https://deepwiki.com/MHSanaei/3x-ui/4.1-inbound-management
+  - https://github.com/MHSanaei/3x-ui/blob/main/docs/public/openapi.json
+  - https://github.com/MHSanaei/3x-ui/blob/main/docs/content/docs/en/reference/api/authentication.mdx
+  - https://github.com/MHSanaei/3x-ui/blob/main/docs/content/docs/en/reference/api/api-tokens.mdx
+  - https://github.com/MHSanaei/3x-ui/blob/main/docs/content/docs/en/guide/first-login.mdx
+  - https://github.com/MHSanaei/3x-ui/blob/main/internal/web/middleware/security.go
+  - https://github.com/MHSanaei/3x-ui/blob/main/internal/web/controller/api.go
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.11.0
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.9.0
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.8.0
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.7.0
+  - https://github.com/MHSanaei/3x-ui/blob/main/frontend/src/schemas/observatory.ts
+  - https://github.com/MHSanaei/3x-ui/tree/v2.8.11
+  - https://github.com/MHSanaei/3x-ui/tree/v2.9.4
 ---
 
 # 3X-UI REST API: cheatsheet для скиллов
@@ -32,7 +45,7 @@ REST API панели 3X-UI — **основной путь** взаимодей
 «можешь сделать X через API».
 
 > ⚠️ **Свежие сборки 3X-UI — это SPA-приложение с ДРУГИМ API** (наблюдалось на MHSanaei/3x-ui
-> `3.4.2`, 2026-07). Старые эндпоинты §6–7 (`getXrayConfig` / `updateXrayConfig` / `addClient`)
+> `3.4.2`, 2026-07). Эндпоинты `getXrayConfig` / `updateXrayConfig` / `addClient`
 > на ней возвращают **404**. Прежде чем работать — определи вариант панели. Карта различий,
 > форматы тел и грабли — **§15**. Решение о поддержке двух вариантов — **ADR-0020**.
 
@@ -48,7 +61,8 @@ https://{DOMAIN}:{PANEL_PORT}/{WEB_BASE_PATH}/panel/api/{ENDPOINT}
 - `{DOMAIN}` — домен панели (например, `vpn.example.com`).
 - `{PANEL_PORT}` — порт панели (нестандартный, из settings).
 - `{WEB_BASE_PATH}` — случайный префикс пути (например, `abc123xyz0`),
-  настроенный через `x-ui setting -webBasePath`. Если webBasePath пустой —
+  настроенный через `/usr/local/x-ui/x-ui setting -webBasePath` (бинарник; в скрипте `x-ui`
+  ветки `setting` нет). Если webBasePath пустой,
   префикс отсутствует, путь начинается прямо с `/panel/api/...`.
 - `{ENDPOINT}` — конкретный путь эндпоинта.
 
@@ -84,9 +98,8 @@ https://vpn.example.com:48391/abc123xyz0/login
 Алгоритм для скриптов:
 
 1. **GET** страницы логина, сохранить cookie + извлечь CSRF-токен.
-   Токен либо в HTML-мете (`<meta name="csrf-token" content="...">`),
-   либо берётся отдельным эндпоинтом `GET /csrf-token` (появился в
-   v3.0.x).
+   На 3.x основной путь `GET /csrf-token`; мета-тега в SPA нет (хелпер это уже учитывает),
+   в старых сборках токен искали в HTML-мете (`<meta name="csrf-token" content="...">`).
 2. **POST** на `/login` с form-data **и заголовком** `x-csrf-token: <token>`.
 3. Если первый POST вернул HTTP 200 без CSRF (`success: true`) — на сервере
    старая версия (≤ v2.x), CSRF не нужен. Если 403 — переключиться на
@@ -140,15 +153,16 @@ curl -s -b "$COOKIE_JAR" \
   "https://${DOMAIN}:${PORT}/${WEB_PATH}/panel/api/inbounds/list"
 ```
 
-**На POST/PUT/DELETE-запросы в v3.0+ CSRF-токен обычно НЕ нужен** —
-middleware проверяет его только на `/login` и нескольких других
-чувствительных путях (`/xray/update`, `/logout`). Но если конкретный
-эндпоинт начал отбивать 403 — добавь `x-csrf-token` к запросу
-(токен переиспользуется, не одноразовый).
+**При входе по cookie каждый POST/PUT/DELETE к `/panel/api/*` обязан нести
+`X-CSRF-Token`**: middleware стоит на всей группе и пропускает только GET/HEAD/OPTIONS/TRACE и
+запросы, прошедшие проверку действующим Bearer-токеном (или проверенным mTLS-сертификатом узла).
+Отказ даёт 403, с v3.11.0 он пишется в лог.
 
 ### 2.3 Срок жизни сессии
 
-Сессия живёт до явного logout или до перезапуска панели. Скилл, работающий
+Сессия живёт `sessionMaxAge` минут (по умолчанию 360) и сбрасывается при смене логина
+или пароля. После 5 неудачных входов за 5 минут пара IP и логина блокируется на 15 минут, поэтому
+повтор `api_login` ограничивать 1-2 попытками. Скилл, работающий
 одной непрерывной сессией (создал inbound → клиенты → outbound → routing →
 restart), может использовать одну cookie от начала до конца.
 
@@ -170,12 +184,14 @@ curl -sS \
 Преимущества:
 - Не зависит от CSRF — токен сам по себе авторизация.
 - Не нужно хранить пароль админа в менеджере паролей оператора.
-- v3.0.2+ поддерживает несколько именованных токенов с разными правами —
-  можно выдать скилу токен с ограниченным scope.
+- С v3.7.0 у токенов есть scope и срок: `admin`, `monitor` (только чтение), `node-sync`,
+  `node-admin` (v3.11.0). Хранятся хешем SHA-256, открытый текст показывается один раз.
+- Управление: `GET/POST /panel/api/setting/apiTokens[/create|/delete/{id}|/setEnabled/{id}]`.
+- С v3.8.0 неверный или выключенный токен даёт 401. Запрос без `Authorization` по-прежнему
+  получает 404 (с `X-Requested-With: XMLHttpRequest` 401), неверный webBasePath тоже 404.
 
 Минусы:
-- Токен надо создать **руками** в UI первый раз (или импортировать из
-  install-output после первой установки v3.0+).
+- Скриптовая установка выпускает токен сама (`XUI_API_TOKEN` в `/etc/x-ui/install-result.env`).
 - В v2.x и ранних v3.0 этого механизма нет — нужен fallback на
   username/password.
 
@@ -304,6 +320,10 @@ api_call POST "/panel/api/inbounds/add" --json-body "$INBOUND_JSON"
 ```bash
 api_call POST "/panel/api/inbounds/update/1" --json-body "$INBOUND_JSON"
 ```
+
+С v3.9.0 `inbounds/update/{id}` молча игнорирует `settings.clients` и `enable`. Клиентами
+управлять только через `/panel/api/clients/*`, вход включать и выключать через
+`POST /panel/api/inbounds/setEnable/{id}`.
 
 ### 4.5 Удалить inbound
 
@@ -504,23 +524,29 @@ CRUD-эндпоинтов. Они хранятся внутри **общего x
 Текущий xray-конфиг:
 
 ```bash
-api_call GET "/panel/api/inbounds/getXrayConfig"
+# 3.x
+api_call POST "/panel/api/xray/"
+# 2.x: POST /panel/xray/ (по cookie, вне /panel/api)
 ```
 
-(возвращает полный JSON Xray, включая outbounds, routing, balancers,
-dns, log).
+(на 3.x отдаёт шаблон конфига Xray строкой, имя поля в `obj` сверить пробой, см. §15.3 п.1;
+путь `inbounds/getXrayConfig` в коде v2.8.11 и v2.9.4 не найден).
 
 ### 6.2 Обновить xray-конфиг (outbounds + routing)
 
 ```bash
-api_call POST "/panel/api/inbounds/updateXrayConfig" --json-body "$NEW_XRAY_JSON"
+# 3.x: POST /panel/api/xray/update, тело form: xraySetting=$NEW_XRAY_JSON (JSON строкой, §15.3 п.2)
+#      в хелпере это api_update_xray_config (§15.4)
+# 2.x: POST /panel/xray/update (по cookie, вне /panel/api)
 ```
+
+Путь `inbounds/updateXrayConfig` в коде v2.8.11 и v2.9.4 не найден.
 
 Где `$NEW_XRAY_JSON` — полный xray-конфиг с обновлёнными outbounds /
 routing / balancers. Скилл `/configure-vpn-routing`:
-1. Получает текущий через `getXrayConfig`.
+1. Получает текущий через `xray/` (§6.1).
 2. Парсит, добавляет/изменяет нужные секции.
-3. Отправляет обновлённый через `updateXrayConfig`.
+3. Отправляет обновлённый через `xray/update`.
 4. Перезапускает Xray (см. §7).
 
 ### 6.3 Шаблон outbound VLESS (для multi-hop)
@@ -598,7 +624,7 @@ routing / balancers. Скилл `/configure-vpn-routing`:
   "observatory": {
     "subjectSelector": ["upstream"],
     "probeUrl": "http://www.google.com/gen_204",
-    "probeInterval": "30s"
+    "probeInterval": "5m"
   }
 }
 ```
@@ -608,7 +634,8 @@ routing / balancers. Скилл `/configure-vpn-routing`:
 ## 7. Перезапуск Xray (обязательно после изменений!)
 
 ```bash
-api_call POST "/panel/api/inbounds/restartXrayService"
+api_call POST "/panel/api/server/restartXrayService"
+# тот же путь на 2.8-2.9 (проверено по коду тегов v2.8.11 и v2.9.4)
 ```
 
 **Без перезапуска** изменения в SQLite не подхватываются работающим
@@ -624,7 +651,7 @@ Xray-процессом. Это та самая «грабля сохранен�
 ### 8.1 Статус сервера
 
 ```bash
-api_call POST "/panel/api/server/status"
+api_call GET "/panel/api/server/status"
 ```
 
 Возвращает CPU, RAM, Disk, uptime, версию Xray, версию 3X-UI, информацию
@@ -633,30 +660,28 @@ api_call POST "/panel/api/server/status"
 ### 8.2 Бэкап базы
 
 ```bash
-api_call POST "/panel/api/inbounds/createbackup"
-# скачивает x-ui-backup.db
+api_call GET "/panel/api/server/getDb"
+# отдаёт полный бэкап: .db или pg_dump
 ```
 
 Или отправка в Telegram:
 ```bash
-api_call POST "/panel/api/inbounds/backuptotgbot"
+api_call POST "/panel/api/backuptotgbot"
 ```
 
 ### 8.3 Загрузка бэкапа
 
 ```bash
-api_call POST "/panel/api/inbounds/uploadbackup" --file backup.db
+api_call POST "/panel/api/server/importDB" --file backup.db
+# multipart, поле db
 ```
 
-(красная зона — перезаписывает текущую БД).
+(красная зона: перезаписывает текущую БД, панель перезапускается).
 
 ### 8.4 Информация о версии
 
-```bash
-api_call GET "/panel/api/server/getDb"
-```
-
-(возвращает версию панели и Xray-ядра).
+`server/getDb` отдаёт бэкап (§8.2), а не версию. `server/getXrayVersion` перечисляет версии
+Xray, доступные к установке. Текущие версии панели и Xray есть в `server/status` (§8.1).
 
 ---
 
@@ -665,14 +690,16 @@ api_call GET "/panel/api/server/getDb"
 3X-UI отдаёт subscription по адресу:
 
 ```
-https://{DOMAIN}:{PANEL_PORT}/{SUBSCRIPTION_PATH}/{CLIENT_UUID}
+https://{DOMAIN}:{PANEL_PORT}/{SUBSCRIPTION_PATH}/{SUB_ID}
 ```
 
+По спецификации 3.x путь подписки `/{subPath}{subid}`: ключ это subId клиента, а не его UUID.
+
 Где `SUBSCRIPTION_PATH` — отдельный путь (не `webBasePath`!), настраиваемый
-в settings. Обычно `sub` или `subscribe`.
+в settings. С v3.8.0 свежая база получает случайные пути подписок, путь читать из настроек.
 
 Содержание ответа — base64-encoded список `vless://...\nvmess://...` ссылок
-от всех inbound, в которых есть данный UUID. Это формат, который понимают
+от всех inbound, в которых есть клиент с данным subId. Это формат, который понимают
 все sing-box / xray клиенты.
 
 **Применение в скилле `/generate-client-config`:** после создания клиента
@@ -768,7 +795,7 @@ routing → restart Xray» — и на шаге 3 произошёл сбой:
 
 3X-UI возвращает `success: true` даже на некоторые семантические ошибки.
 Скилл проверяет результат **функционально**: после добавления inbound —
-делает `getXrayConfig` или `list inbounds` и убеждается, что новый inbound
+делает `inbounds/list` и убеждается, что новый inbound
 действительно появился. После restart Xray — проверяет, что `systemctl
 status x-ui` остался `active (running)`.
 
@@ -781,8 +808,9 @@ status x-ui` остался `active (running)`.
 - **Кастомные настройки sniffing** глубже чем `destOverride` — могут
   потребовать прямой правки в SQLite.
 - **Изменение `webBasePath`** через API не предусмотрено — только через
-  `x-ui setting -webBasePath` CLI или прямую правку таблицы `settings`.
-- **Восстановление из бэкапа с миграцией структуры** — через `uploadbackup`
+  `/usr/local/x-ui/x-ui setting -webBasePath` (бинарник, не скрипт `x-ui`) или прямую правку
+  таблицы `settings`.
+- **Восстановление из бэкапа с миграцией структуры**: через `server/importDB` (§8.3)
   API не всегда корректно работает между сильно разнесёнными версиями.
 
 В таких случаях скилл переходит к **прямой правке SQLite**:
@@ -842,22 +870,27 @@ systemctl status x-ui | grep "active (running)" || echo "FAIL"
 
 ### 15.2 Карта эндпоинтов (что поменялось)
 
+Карта SPA совпадает с официальной спецификацией 3.x (`docs/public/openapi.json`, сверено
+2026-10-27), старых путей в ней нет.
+
 | Задача | Старый (§1–14) | SPA-сборка 3.4.x | Тело запроса |
 |---|---|---|---|
-| Читать xray-конфиг | `GET inbounds/getXrayConfig` | `GET server/getConfigJson` | — |
-| Писать outbounds/routing | `POST inbounds/updateXrayConfig` | `POST xray/update` | **form**: `xraySetting=<json-строка>&outboundTestUrl=<url>` |
-| Рестарт xray | `POST inbounds/restartXrayService` | `POST server/restartXrayService` | — |
-| Добавить вход | `POST inbounds/add` | `POST inbounds/add` (путь тот же) | **form**: `remark`,`port`,`protocol`,`settings`,`streamSettings`,`sniffing`,`allocate` |
+| Читать xray-конфиг | `POST /panel/xray/` (по cookie, вне `/panel/api`) | `GET server/getConfigJson` (склеенный); шаблон `POST xray/` (§15.3 п.1) | нет |
+| Писать outbounds/routing | `POST /panel/xray/update` (по cookie, вне `/panel/api`) | `POST xray/update` | **form**: `xraySetting=<json-строка>&outboundTestUrl=<url>` |
+| Рестарт xray | `POST server/restartXrayService` (тот же путь на 2.8-2.9, код тегов v2.8.11 и v2.9.4) | `POST server/restartXrayService` | нет |
+| Добавить вход | `POST inbounds/add` | `POST inbounds/add` (путь тот же) | по спецификации 3.x **JSON** с вложенными объектами (строки приняты как legacy); бандл 3.4.2 слал **form**: `remark`,`port`,`protocol`,`settings`,`streamSettings`,`sniffing`,`allocate` |
 | Список входов | `GET inbounds/list` | `GET inbounds/list` (работает) ИЛИ `list/slim` | — |
 | Прочитать один вход | `GET inbounds/get/{id}` | `GET inbounds/get/{id}` (путь тот же) | — ⚠️ `.obj.settings` на SPA — **ОБЪЕКТ**, на legacy — **строка** (см. §15.3 п.7) |
-| Добавить клиента | внутри входа (`addClient`) | `POST clients/add` | **JSON** `{client:{...},inboundIds:[id]}` — UUID генерит панель |
+| Добавить клиента | внутри входа (`addClient`) | `POST clients/add` | **JSON** `{client:{...},inboundIds:[id]}`; про UUID см. §15.3 п.3 |
 | Удалить клиента | `inbounds/{id}/delClient/{uuid}` | `POST clients/del/{EMAIL}[?keepTraffic=1]` | — ⚠️ ключ **EMAIL** (НЕ uuid, НЕ числовой id!) |
 | Обновить клиента | `updateClient/{uuid}` | `POST clients/update/{EMAIL}` | **JSON** |
 | Клиенты (bulk) | — | `clients/bulkCreate`, `clients/bulkDel` `{emails:[],keepTraffic}`, `clients/bulkAttach`/`bulkDetach` `{emails:[],inboundIds:[]}`, `clients/bulkEnable`/`bulkDisable` `{emails,enable}`, `clients/delOrphans`, `clients/delDepleted` | **JSON**, ключ везде **email** |
-| Настройки | `POST server/status` | `GET setting/all`, `POST setting/update`, `getDefaultJsonConfig` | — |
+| Настройки | путь на 2.x не подтверждён, сверено по спецификации 3.x 2026-10-27 | `POST setting/all`, `POST setting/update`, `GET setting/getDefaultJsonConfig`; статус `GET server/status` | нет |
 
 Прочие семейства из бандла: `xray/*` (`routeTest`,`testOutbounds`,`outbound-subs`,`balancer*`,`warp/*`,`nord/*`),
 `nodes/*`, `hosts/*`, `clients/groups/*`, `clients/onlines`, `clients/get/{email}`, `clients/list/paged`, `clients/export`/`import`.
+По спецификации 3.x также: `inbounds/setEnable/{id}`, `clients/get/subId/{subId}` (v3.11.0),
+`xray/balancerStatus`, `xray/balancerOverride`.
 
 > **Клиент на SPA — ОТДЕЛЬНАЯ email-ключевая сущность** (таблицы БД `clients`, `client_inbounds`
 > junction, `client_traffics`), а не запись внутри `inbound.settings.clients` как в legacy. Уникальный
@@ -872,11 +905,15 @@ systemctl status x-ui | grep "active (running)" || echo "FAIL"
    обратно через `xray/update` → вход из БД дублируется в шаблоне → xray падает в цикле
    `existing tag found: in-443-tcp` (exit 23). **Перед записью ВСЕГДА вычищай `.inbounds` до
    одного служебного `api`** — пользовательские входы приходят из БД сами.
+   Шаблон для обратной записи читать `POST /panel/api/xray/` (отдаёт шаблон строкой; имя поля
+   в `obj` сверить пробой).
 2. **`xray/update` — тело FORM.** `xraySetting` — это JSON-конфиг **строкой** в form-поле
    (`--data-urlencode "xraySetting=$CFG"`). JSON-тело → `unexpected end of JSON input`.
 3. **`clients/add` — тело JSON, обёртка `{client:{...},inboundIds:[N]}`.** Плоский `{email:...}`
-   → «email is required»; form-тело → «invalid character 'e'». **UUID генерит панель** — свой в
-   теле игнорируется, реальный брать из `inbounds/get/{id}` после создания.
+   → «email is required»; form-тело → «invalid character 'e'». **UUID:** на 3.4.2 свой в теле
+   игнорировался; по спецификации 3.x корректное значение от вызывающего не перезаписывается
+   («a valid value sent by the caller is never overwritten»). Реальный всё равно брать из
+   `inbounds/get/{id}` после создания.
 4. **Клиент — отдельная сущность и переживает удаление входа** → становится «сиротой», повторный
    `clients/add` с тем же email → «email already in use». Чистить `POST clients/delOrphans`.
 5. **Reality-донор проверять сквозным подключением**, не только TLS-тестом: `www.microsoft.com`
@@ -889,8 +926,9 @@ systemctl status x-ui | grep "active (running)" || echo "FAIL"
 8. **Удаление клиента на SPA — по EMAIL** (`clients/del/{email}`), НЕ по uuid и НЕ по числовому id.
    Проверено эмпирически: `clients/del/{uuid}` и `clients/del/{числовой-id}` дают `success:false`
    «client not found», а `clients/del/{email}` → `success:true`. Ключ — email (см. §15.2).
-9. **UUID нового клиента генерит панель** (свой в теле `clients/add` игнорируется). В ответе `clients/add`
-   его нет — забирать перечитыванием `inbounds/get/{id}` по email (`api_get_client_uuid`). Отдать наружу
+9. **UUID нового клиента:** на 3.4.2 панель генерировала свой (UUID из тела `clients/add` игнорировался),
+   по спецификации 3.x переданный корректный UUID сохраняется. В ответе `clients/add` его нет, поэтому
+   забирать перечитыванием `inbounds/get/{id}` по email (`api_get_client_uuid`). Отдать наружу
    выдуманный UUID = клиентский конфиг не подключится.
 10. **Дефолтный outbound = ПЕРВЫЙ в массиве `.outbounds`** — у живого конфига может НЕ быть явного
     default-правила в `routing.rules` (весь нематченный трафик идёт на `outbounds[0]`). При правке
