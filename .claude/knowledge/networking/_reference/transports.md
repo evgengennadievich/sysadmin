@@ -512,7 +512,7 @@ Plugin-chain: SS-server → v2ray-plugin → реальный TCP-сокет.
 ✅ Конфликт снят по официальной документации (2026-10-27): REALITY поддержан на движке
 `go`, `xtls-rprx-vision` указан значением `flow` для inbound и outbound VLESS. Утверждение
 singbox-internals об отсутствии Vision официальной документацией не подтверждается.
-Запись в `_meta/conflicts.md` закрыть.
+Запись в `_meta/conflicts.md` закрыта (КОНФЛИКТ-002).
 
 **Практический совет:** по документации sing-box поддерживает REALITY+Vision:
 `flow: xtls-rprx-vision` описан у inbound и outbound VLESS, реализация в
@@ -606,9 +606,9 @@ Reality закрывает рукопожатие и активное зонди
 Задача: установить VPN на свой загр.VPS для повседневного использования из РФ
 ├── Цель — обход блокировок DPI
 │   ├── Нужен максимум защиты от 16-KB curtain → XHTTP за реальным Nginx с TLS 1.2
-│   │   └── НО: клиенты только Xray (FoxRay, v2rayN, v2rayNG); НЕ Hiddify/Karing
+│   │   └── НО: клиенты только Xray (v2rayN, v2rayNG; FoxRay на iOS под вопросом, см. §3.6); НЕ Hiddify/Karing
 │   ├── Нужна универсальность по клиентам → VLESS+TCP+REALITY+Vision
-│   │   └── Работает на Hiddify/Karing (через sing-box REALITY без Vision) и Xray-клиентах
+│   │   └── Xray-клиенты; Hiddify/Karing (sing-box): Vision по документации есть, совместимость с Xray живым тестом не проверена (§12.1)
 │   └── Нужна мобильная батарея + UDP-устойчивость → Hysteria2 с masquerade
 │       └── UDP — риск блокировки в РФ-2026
 ├── Цель — multi-hop через свой RU-VPS
