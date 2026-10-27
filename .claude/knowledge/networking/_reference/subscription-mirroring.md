@@ -1,13 +1,16 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-08-26
+last_researched: 2026-10-27
 ttl_days: 60
 sources_checked:
   - https://www.happ.su/main/ru/dev-docs/crypto-link
   - https://f.docs.rw/t/topic/382
   - "gist пользователя bubasik на GitHub «Как вытащить vpn список vless серверов из happ подписки для v2raya, v2rayN» (искать по названию; ID gist не приводится, чтобы не путать замок с ключом)"
   - https://publish.obsidian.md/zapret/subscriptions/hwid-client-lock
+  - https://docs.rw/docs/features/hwid-device-limit
+  - https://www.happ.su/main/dev-docs/encrypting-subscription-content
+  - https://www.happ.su/main/ru/dev-docs/app-management.md
 ---
 
 # Зеркалирование платной VPN-подписки на свой сервер (обход лимита устройств)
@@ -20,10 +23,16 @@ sources_checked:
 >
 > ⚠️ **Обновление 2026-08-26.** Провайдеры на Remnawave переходят на зашифрованные ссылки
 > `happ://crypt4/` и `happ://crypt5/` (адрес подписки скрыт в приложении, см.
-> `happ-subscription-format.md` §10). Метод из этого документа для `crypt5` **не
+> `happ-subscription-format.md` §10). На 27.10.2026 в доке Happ рекомендация «только
+> crypt4» зачёркнута, новым типом указан `crypt5`. Метод из этого документа для `crypt5` **не
 > проверялся**; для `crypt4` HWID-путь остаётся рабочим по состоянию на 2026-08-04
 > (последнее извлечение в infra). Remnawave знает про подделку HWID и фиксирует
 > повторные пробные подписки с одного адреса.
+>
+> Вторая преграда, от `happ://crypt` не зависит: Happ принимает **зашифрованное
+> содержимое** подписки (AES-128-GCM, `?key=<id>` в адресе, тег в заголовке `encrypt-tag`).
+> У такого провайдера `base64 -d` даёт шифротекст вместо `vless://`. `sub-sync.sh` штатно
+> откажет («не vless») и рабочий файл не тронет, но извлечь серверы этим методом не получится.
 
 ## Идея одной фразой
 
@@ -80,6 +89,20 @@ curl -sL --max-time 30 \
 base64 -d sub.b64 | grep -c '^vless://'                 # сколько серверов
 base64 -d sub.b64 | grep -c '00000000-0000-0000'        # заглушек должно быть 0
 ```
+
+**Диагноз по заголовкам ответа (панель Remnawave).** Заголовки HWID у Remnawave штатные
+с версии панели 2.7.5 и приходят при включённом лимите устройств: `x-hwid-active: true`
+(лимит включён), `x-hwid-not-supported: true` (в запросе не было `x-hwid`),
+`x-hwid-max-devices-reached: true` (все слоты заняты), `x-hwid-limit: true` (лимит исчерпан,
+для совместимости с v2RayTun). Если лимит включён, а запрос пришёл без `x-hwid`, панель
+отвечает `404`. С версии 3.0.0 HWID должен быть длиной 10-64 символа из латиницы, цифр, `=`
+и `-`, иначе заголовок игнорируется; 16-символьный hex из plist под это подходит. Смотреть:
+`curl -sS -D - -o /dev/null ... | grep -i '^x-hwid'`.
+
+> ⚠ У десктопного Happ провайдер может включить заголовок `subscription-alternative-hwid-enabled`,
+> то есть отправку альтернативного HWID. Тогда HWID в запросе может не совпасть с тем, что
+> лежит в plist; какой из двух там хранится, не проверено. Путь выше относится к Happ Plus
+> (`group.su.ffg.happ.plus`); где хранит HWID Happ Desktop, не проверялось.
 
 **Гео-блокировка.** Некоторые провайдеры отдают 502/заглушку на не-РФ IP.
 С РФ-сервера тот же провайдер отдаёт нормально (проверено). Если с нужной машины не отдаёт —
