@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-07-02
+last_researched: 2026-10-27
 ttl_days: 60
 sources_checked:
   - https://github.com/MHSanaei/3x-ui
@@ -15,6 +15,28 @@ sources_checked:
   - https://deepwiki.com/MHSanaei/3x-ui/5.2-telegram-bot-integration
   - https://xtls.github.io/en/config/routing.html
   - https://xtls.github.io/en/config/inbounds/socks.html
+  - https://xtls.github.io/en/config/observatory.html
+  - https://github.com/XTLS/Xray-core/blob/main/infra/conf/observatory.go
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.11.0
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.10.0
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.9.0
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.8.0
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.7.0
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.5.0
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.3.1
+  - https://github.com/MHSanaei/3x-ui/blob/main/docs/public/openapi.json
+  - https://github.com/MHSanaei/3x-ui/blob/main/docs/content/docs/en/guide/installation.mdx
+  - https://github.com/MHSanaei/3x-ui/blob/main/docs/content/docs/en/guide/first-login.mdx
+  - https://github.com/MHSanaei/3x-ui/blob/main/docs/content/docs/en/reference/env-vars.mdx
+  - https://github.com/MHSanaei/3x-ui/blob/main/docs/content/docs/en/reference/database.mdx
+  - https://github.com/MHSanaei/3x-ui/blob/main/x-ui.sh
+  - https://github.com/MHSanaei/3x-ui/blob/main/frontend/src/schemas/observatory.ts
+  - https://github.com/MHSanaei/3x-ui/blob/main/frontend/src/pages/xray/balancers/BalancerFormModal.tsx
+  - https://github.com/MHSanaei/3x-ui/tree/v2.8.11
+  - https://github.com/MHSanaei/3x-ui/tree/v2.9.4
+  - https://github.com/MHSanaei/3x-ui/issues/4390
+  - https://github.com/MHSanaei/3x-ui/issues/4406
+  - https://github.com/MHSanaei/3x-ui/issues/4409
 ---
 
 # 3X-UI: архитектура панели и операционные грабли
@@ -103,14 +125,20 @@ flowchart LR
   `leastPing` и `leastLoad` требуют включённого `observatory` (модуль
   мониторинга outbound health).
 - `fallbackTag` — куда уходит трафик, если все upstream-ы недоступны.
+- С v3.5.0 `fallbackTag` может указывать на другой балансир.
+- С v3.3.1 есть `POST /panel/api/xray/balancerOverride` (`tag`, `target`): действует сразу
+  без рестарта, сбрасывается при рестарте Xray или удалении целевого outbound; с v3.10.0
+  переживает перезагрузку маршрутизации.
 
 > ⚠️ **Форма балансировщика в 3X-UI — только 4 поля** (подтверждено из исходника
-> `frontend/src/pages/xray/BalancersTab.tsx`, MHSanaei/3x-ui, проверено 2026-05-24):
+> `frontend/src/pages/xray/balancers/BalancerFormModal.tsx`, перепроверено 2026-10-27; полей
+> по-прежнему четыре):
 > `tag`, `strategy`, `selector`, `fallbackTag`. **Настройки sticky-гистерезиса
 > («держись за сервер, пока его пинг не станет хуже быстрейшего на N мс») в панели
 > НЕТ** — ни в форме, ни в Observatory-редакторе. Такой порог-в-миллисекундах
 > существует только на КЛИЕНТЕ (sing-box `urltest.tolerance`, дефолт 50ms), не на
 > сервере. Не путать: «Latency»-порог в клиентских приложениях ≠ серверный балансир.
+> `tolerance` у `leastLoad` означает допустимую долю отказов, а не порог в миллисекундах.
 >
 > **Как добиться предсказуемого (стабильного) выходного IP на сервере** — без
 > несуществующего sticky-порога:
@@ -154,8 +182,9 @@ flowchart LR
 ```
 
 `leastPing` / `leastLoad` балансировщики используют его данные. Без
-`observatory` они работают неточно (фоллбэк на статические замеры
-из routing-кеша).
+`observatory` не работают: по документации XTLS `leastPing` и `leastLoad` обязаны работать
+в паре с observatory или burstObservatory. Если все outbound недоступны и `fallbackTag` не задан,
+выбирается outbound по умолчанию.
 
 > 💡 **`probeInterval`: 5m, не 30s/1m.** 3X-UI по умолчанию ставит `1m`. Чем
 > чаще переоценка — тем чаще балансир может переключить клиента между близкими
@@ -165,11 +194,13 @@ flowchart LR
 > (`PROBE_INTERVAL`). Для `leastLoad`/burstObservatory есть ещё `sampling`
 > (усреднение замеров; скилл поднимает с 2 до 4 — сглаживает всплески пинга).
 
-> ⚠️ В разных версиях Xray-core имена полей менялись. В современной
-> документации XTLS — `probeUrl`/`probeInterval`. В старых конфигах
-> и комьюнити-туториалах встречается `pingConfig` — это устаревшее имя,
-> в свежем Xray не работает. Если в источнике увидено `pingConfig` —
-> заменять на `probeUrl`+`probeInterval`.
+> ⚠️ `pingConfig` не устаревшее имя, а подобъект `burstObservatory` (поля `destination`,
+> `connectivity`, `interval`, `sampling`, `timeout`, `httpMethod`). У `observatory` поля
+> `subjectSelector`, `probeURL`, `probeInterval`, `enableConcurrency`. В исходнике Xray имя
+> `probeURL`, в документации `probeUrl`, панель пишет `probeURL`. Блоки не смешивать:
+> `pingConfig` внутри `observatory` Xray молча пропустит (загрузчик не отвергает неизвестные
+> поля), а `burstObservatory` без `pingConfig` не соберётся: ошибка "BurstObservatory requires
+> a valid pingConfig".
 
 ---
 
@@ -187,8 +218,12 @@ bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.
 breaking changes):
 
 ```bash
-VERSION=v3.0.2 && bash <(curl -Ls "https://raw.githubusercontent.com/mhsanaei/3x-ui/$VERSION/install.sh") $VERSION
+VERSION=v3.11.0 && bash <(curl -Ls "https://raw.githubusercontent.com/mhsanaei/3x-ui/$VERSION/install.sh") $VERSION
 ```
+
+Теги v3.0.0, v3.0.1 и v3.0.2 помечены на GitHub как pre-release. На 27.10.2026 стабильная
+v3.11.0, шаг назад v3.10.2 (14.10). С v3.8.0 установщик сверяет архив с `<asset>.sha256` и берёт
+`x-ui.sh` и юниты из того же тега.
 
 ### 2.2 Поддерживаемые ОС
 
@@ -214,8 +249,12 @@ VERSION=v3.0.2 && bash <(curl -Ls "https://raw.githubusercontent.com/mhsanaei/3x
   config_port=$(shuf -i 1024-62000 -n 1)
   ```
 - **Интерактивный вопрос:** «Would you like to customize the Panel Port
-  settings?» — то есть **неинтерактивного режима через ENV vars для
-  логина/пароля стандартного установщика нет** (на 2026-05).
+  settings?».
+- Неинтерактивный режим есть: `XUI_NONINTERACTIVE=1` или запуск без TTY. Установщик сам
+  генерирует логин, пароль, порт, путь и API-токен и пишет их в `/etc/x-ui/install-result.env`
+  (режим 600; ключи `XUI_USERNAME`, `XUI_PASSWORD`, `XUI_PANEL_PORT`, `XUI_WEB_BASE_PATH`,
+  `XUI_ACCESS_URL`, `XUI_API_TOKEN`, `XUI_DB_TYPE`). В файле секреты, их нужно перенести в
+  менеджер паролей.
 - ENV vars, влияющие на установку:
   - `XUI_MAIN_FOLDER` — директория установки (default: `/usr/local/x-ui`).
   - `XUI_SERVICE` — путь для systemd (default: `/etc/systemd/system`).
@@ -223,7 +262,10 @@ VERSION=v3.0.2 && bash <(curl -Ls "https://raw.githubusercontent.com/mhsanaei/3x
 
 ### 2.4 Docker-образ
 
-Имеет **жёсткие дефолтные креды** `admin/admin` и порт `2053`. Если ставится
+Дефолт панели: порт `2053`, путь `/`. Первый пользователь получает случайные креды; в Docker их
+брать из логов контейнера или командой `docker exec -it <container> /app/x-ui setting -show true`
+(документация пишет `x-ui setting -show`, но в образе `x-ui` это скрипт без ветки `setting`). Если
+там `admin/admin`, сменить до создания inbound. Если ставится
 Docker-вариант — **первая операция после установки** = смена логина и пароля
 через CLI или API.
 
@@ -231,7 +273,8 @@ Docker-вариант — **первая операция после устан�
 
 `/setup-vpn-panel` поверх официального установщика:
 1. Запускает установщик с фиксацией версии.
-2. **Сразу после первого запуска** через CLI `x-ui setting` меняет:
+2. **Сразу после первого запуска** через бинарник `/usr/local/x-ui/x-ui setting` (в скрипте
+   `x-ui` ветки `setting` нет, §4.1) меняет:
    - `-username` на сгенерированный 8-символьный (не `admin`).
    - `-password` на сгенерированный 32-символьный.
    - `-port` на нестандартный из переданного параметра.
@@ -256,6 +299,17 @@ Docker-вариант — **первая операция после устан�
 | `/usr/local/x-ui/bin/xray-linux-amd64` | Ядро Xray (запускается панелью) | `XUI_BIN_FOLDER` |
 | `/etc/systemd/system/x-ui.service` | systemd unit | — |
 | `/root/cert/{domain}/` | Сертификаты Let's Encrypt по умолчанию | — |
+
+Изменения раскладки в свежих версиях (сверено 2026-10-27):
+- с v3.8.0 права на базу: каталог 0700, файлы базы и `-wal`/`-shm` 0600;
+- есть PostgreSQL: `XUI_DB_TYPE=postgres` и `XUI_DB_DSN` в `/etc/default/x-ui`;
+- с v3.10.0 служба запускается в песочнице systemd: `/usr`, `/boot`, `/etc`, `/home`, `/root`
+  доступны ей только на чтение, кроме собственных каталогов; дополнительные пути добавлять через
+  `ReadWritePaths=` в `x-ui.service.d/20-local.conf`, а `10-xui-sandbox.conf` перегенерируется при
+  каждом install и update;
+- Xray 26.10.x проверяет TLS outbound по встроенным корням Mozilla, для частного центра
+  сертификации нужна опция «Use system CA»;
+- исходники Go переехали в `internal/`.
 
 > **🔴 Живой лог Xray определяй по fd процесса, НЕ по пути в конфиге и НЕ по наличию файла.**
 > Ядро Xray пишет `access.log`/`error.log` в **`/var/log/x-ui/`** (не `/var/log/xray/`). После
@@ -324,12 +378,18 @@ systemctl start x-ui
 | `x-ui update` | Обновление панели до последней версии |
 | `x-ui install` | Запуск установки (вызывается изнутри установщика) |
 | `x-ui uninstall` | Полное удаление |
-| `x-ui setting` | Управление настройками (см. ниже) |
+| `/usr/local/x-ui/x-ui setting` | Управление настройками; это ветка бинарника, в скрипте `x-ui` её нет (см. §4.1) |
 
-### 4.1 `x-ui setting` — флаги
+В `x-ui.sh` (ветка main, сверено 2026-10-27) есть также команды `banlog`, `setup-fail2ban`,
+`update-dev`, `legacy`, `update-all-geofiles`, `pgclient`; их назначение здесь не расписано.
+
+### 4.1 Флаги `/usr/local/x-ui/x-ui setting`
+
+Флаги относятся к бинарнику `/usr/local/x-ui/x-ui`; у скрипта-обёртки `x-ui` ветки `setting` нет.
 
 | Флаг | Назначение |
 |---|---|
+| `-getApiToken -tokenName <имя> [-tokenScope <scope>]` | API-токен с именем и scope (scope см. `3x-ui-api.md` §2.4) |
 | `-username "..."` | Изменить логин админа |
 | `-password "..."` | Изменить пароль |
 | `-port N` | Изменить порт панели |
@@ -341,9 +401,9 @@ systemctl start x-ui
 
 ### 4.2 Команды миграции БД
 
-В коде `x-ui.sh` команды `migrate` **нет**. Миграции выполняются автоматически
-при запуске бинарника `x-ui`. То есть: достаточно обновить панель через
-`x-ui update` или новой установкой поверх — миграция БД произойдёт сама.
+Миграции схемы автоматические; с v3.10.0 update прогоняет их до запуска службы (v3.7.0
+требует бэкап перед обновлением). Команда `x-ui migrateDB [file.db|file.dump] [output]` схему не
+мигрирует, а конвертирует `.db` в `.dump` и обратно.
 
 ---
 
@@ -418,7 +478,9 @@ systemctl start x-ui
 
 ## 7. Известные подводные камни
 
-### 7.1 Issue #4390 — ssl_cert_issue_main infinite-loops на closed stdin
+### 7.1 Issue #4390: ssl_cert_issue_main infinite-loops на closed stdin (закрыт 29.05.2026, GitHub: completed)
+
+Версия с исправлением в issue не указана, живьём не проверено, обходной путь пока сохранять.
 
 При автоматизации через cron / Ansible (где stdin закрыт) встроенный вызов
 acme.sh попадает в бесконечный цикл → `systemctl restart storm`.
@@ -427,12 +489,16 @@ acme.sh попадает в бесконечный цикл → `systemctl resta
 с закрытым stdin. Использовать способ C (certbot снаружи) или способ B
 (Cloudflare DNS — не требует stdin).
 
-### 7.2 Issue #4406 — VLESS+XHTTP outbound парсится неправильно
+### 7.2 Issue #4406: VLESS+XHTTP outbound парсится неправильно (закрыт 19.05.2026, GitHub: completed)
+
+Версия с исправлением в issue не указана, живьём не проверено, обходной путь пока сохранять.
 
 Баг парсера XHTTP-конфигов в outbound. **Workaround:** не использовать XHTTP
 transport в outbound. Использовать стандартные TCP / WS / gRPC transport.
 
-### 7.3 Issue #4409 — Cannot login after manual install on Ubuntu
+### 7.3 Issue #4409: Cannot login after manual install on Ubuntu (закрыт 15.05.2026, GitHub: completed)
+
+Версия с исправлением в issue не указана, живьём не проверено, обходной путь пока сохранять.
 
 После ручной установки (не через официальный install.sh) логин не работает.
 **Workaround:** использовать только официальный install.sh, не «ставить руками».
@@ -452,7 +518,11 @@ transport в outbound. Использовать стандартные TCP / WS 
 ### 7.6 CPU/Disk overload при росте числа клиентов
 
 При >50 активных клиентов SQLite начинает тормозить, CPU вырастает.
-**Workaround:** для масштаба >50 — рассматривать Marzban (он на PostgreSQL).
+**Workaround:** сама 3X-UI поддерживает PostgreSQL (в релизах с v3.1.0); документация рекомендует
+его при большом числе клиентов и для нескольких узлов. Перенос из SQLite:
+`/usr/local/x-ui/x-ui migrate-db --dsn "<DSN>"` (в меню `x-ui`: Migrate SQLite -> PostgreSQL) или,
+с v3.5.0, восстановлением `.db` в панели на PostgreSQL. Порог в 50 клиентов источником не
+подтверждён.
 Для домашних сценариев (1-20 клиентов) — несущественно.
 
 ### 7.7 Самонаезд через `/etc/environment` (self-loop)
@@ -505,7 +575,8 @@ systemctl restart x-ui
 изменения остаются только в SQLite, но не в работающем процессе Xray.
 
 В REST API — то же самое: после CRUD-операций нужен явный вызов
-`/panel/api/inbounds/restartXrayService` (см. `3x-ui-api.md`). Скиллы
+`POST /panel/api/server/restartXrayService` (тот же путь на 2.8-2.9, проверено по коду тегов
+v2.8.11 и v2.9.4; см. `3x-ui-api.md` §15). Скиллы
 сисадмина это знают и вызывают автоматически.
 
 **Рестарт ядра из скрипта/cron (от root, без API и без веб-панели) — `x-ui restart-xray`.**
