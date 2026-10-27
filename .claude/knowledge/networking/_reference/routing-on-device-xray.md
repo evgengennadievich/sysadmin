@@ -1,13 +1,17 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-08-26
+last_researched: 2026-10-27
 ttl_days: 60
 sources_checked:
   - https://xtls.github.io/en/config/routing.html
   - https://xtls.github.io/en/config/inbounds/socks.html
   - https://github.com/XTLS/Xray-core
   - практический опыт настройки (2026-05-22)
+  - https://xtls.github.io/en/config/inbounds/tun.html
+  - https://github.com/XTLS/Xray-rules-dat
+  - https://github.com/XTLS/Xray-core/releases/tag/v26.10.21
+  - https://github.com/XTLS/Xray-core/releases
 ---
 
 # Гибкая маршрутизация НА УСТРОЙСТВЕ через Xray (терминал) — для энтузиастов
@@ -58,19 +62,21 @@ Code). Здесь — про **полноценный routing-split** по geoip
 
 **Плюсы:**
 - Xray-синтаксис routing **идентичен серверному** (`routing-server-3xui.md` §4) —
-  одни и те же `geosite:ru`, `geoip:ru`, `outboundTag`. Если сисадмин уже умеет
+  одни и те же `geosite:category-ru`, `geoip:ru`, `outboundTag` (категории `geosite:ru` в стандартном
+  geosite XTLS/Xray-rules-dat нет, есть `category-ru`). Если сисадмин уже умеет
   серверный конфиг, локальный пишется так же.
-- Xray умеет **chain через `dialerProxy`** (VLESS→VLESS), чего нет в sing-box
-  (см. `xray-mac-chain.md` — issue SagerNet/sing-box#1562 закрыт «not planned»).
+- Xray умеет **chain через `dialerProxy`** (VLESS→VLESS), у нас эта схема проверена на практике
+  (`xray-mac-chain.md`). В sing-box такая цепочка по документации тоже описана штатно (`detour`), но
+  живым тестом не проверялась; прежняя ссылка на SagerNet/sing-box#1562 была ошибочной.
 - Ставится через терминал (`brew`, бинарник с GitHub) — хорошо ложится на работу
   с агентом-сисадмином.
 
 **Минусы / почему нишевая:**
 - Нет «приличного» нативного GUI под routing-split (в отличие от
   GUI.for.SingBox для sing-box). Конфиг правится руками в JSON.
-- TUN на Xray-core на десктопе — отдельная морока (Xray сам не поднимает
-  системный TUN так гладко, как sing-box; часто нужен tun2socks-слой, который
-  конфликтен — см. `xray-mac-chain.md` антипаттерн tun2proxy).
+- TUN на Xray-core на десктопе у нас не проверен: собственный TUN inbound у Xray есть (на macOS
+  в стабильной ветке с v26.1.23, см. §4), но живым тестом не испытан; внешний tun2socks/tun2proxy
+  конфликтен (антипаттерн в `xray-mac-chain.md`). Для полного TUN-перехвата пока проще sing-box.
 - На мобильных Xray-routing руками — только через клиенты вроде v2rayNG/Happ,
   где raw route-конфиг доступен ограниченно.
 
@@ -146,14 +152,23 @@ launchd (Mac) / systemd (Linux) / nssm (Windows).
 - `domainStrategy: "IPIfNonMatch"` — Xray резолвит домен в IP и проверяет
   geoip-правила, если не совпало по домену. Важно для полноты РФ-direct.
 
-geoip.dat/geosite.dat Xray тянет автоматически (или кладутся рядом с бинарником).
+geoip.dat и geosite.dat входят в пакет установки Xray и по умолчанию не обновляются; автообновление с
+горячей перезагрузкой включается разделом конфига `geodata` (cron и assets). С v26.10.21 (21.10.2026)
+GitHub-архивы Xray несут данные XTLS/Xray-rules-dat: geoip в варианте lite (из стран только `ru`, `cn`, `ir`
+как псевдонимы региональных наборов `in-*`, плюс `private` и общие категории), geosite стандартный
+(`category-ru` и `category-ads-all` в нём есть). `geoip:ru` теперь псевдоним `in-ru`: RU-адреса плюс белый
+список мобильного интернета. Правилам с другими странами нужен `geoip-full.dat` вместо geoip.dat или
+отдельный файл страны (`ext:us.dat:us`). Формула Homebrew `xray` 26.10.21 по-прежнему ставит данные
+Loyalsoldier/v2ray-rules-dat. Конфиг §3 работает в обоих вариантах.
 
 ---
 
 ## §4 Как трафик попадает в локальный Xray
 
-Xray поднимает только SOCKS/HTTP **inbound на localhost** — он не перехватывает
-системный трафик сам. Варианты «как направить трафик в него»:
+В этой схеме Xray поднимает SOCKS/HTTP **inbound на localhost**. Собственный TUN inbound у Xray есть и на
+macOS с v26.1.18 (18.01.2026, PR #5559; это пре-релиз, первый стабильный релиз с TUN на macOS v26.1.23),
+а также на Windows, Linux и FreeBSD; на Android и iOS только через FD от внешнего приложения. TUN-режим
+Xray на Mac живым тестом не проверялся. Варианты «как направить трафик в него»:
 
 1. **System proxy / per-app proxy** — указать приложению `socks5://127.0.0.1:10808`.
    Простой, но ловит только приложения, знающие про прокси (браузер — да,
@@ -161,7 +176,8 @@ Xray поднимает только SOCKS/HTTP **inbound на localhost** — �
 2. **HTTP-bridge через privoxy** — для программ, понимающих только HTTP_PROXY
    (Claude Code/undici не умеет SOCKS5): privoxy `forward-socks5 / 127.0.0.1:10808 .`
    на :8118 (см. `xray-mac-chain.md` §2). Затем `HTTPS_PROXY=http://127.0.0.1:8118`.
-3. **TUN через tun2socks-слой** — для перехвата ВСЕГО системного трафика.
+3. **TUN** для перехвата ВСЕГО системного трафика: встроенный TUN inbound Xray (по документации, у нас
+   не проверен) или sing-box; внешний tun2proxy по-прежнему антипаттерн.
    ⚠️ Конфликтен (tun2proxy правит routes/DNS и не чистит — антипаттерн в
    `xray-mac-chain.md`). Если нужен полный TUN-перехват с гибким routing — проще
    взять sing-box (`routing-on-device-singbox.md`), он поднимает TUN нативно.
