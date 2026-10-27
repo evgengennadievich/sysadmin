@@ -45,7 +45,8 @@ REST API панели 3X-UI — **основной путь** взаимодей
 «можешь сделать X через API».
 
 > ⚠️ **Свежие сборки 3X-UI — это SPA-приложение с ДРУГИМ API** (наблюдалось на MHSanaei/3x-ui
-> `3.4.2`, 2026-07). Эндпоинты `getXrayConfig` / `updateXrayConfig` / `addClient`
+> `3.4.2`, 2026-07). Эндпоинты `getXrayConfig` / `updateXrayConfig` (этих путей нет и в коде
+> 2.8-2.9, §6) / `addClient`
 > на ней возвращают **404**. Прежде чем работать — определи вариант панели. Карта различий,
 > форматы тел и грабли — **§15**. Решение о поддержке двух вариантов — **ADR-0020**.
 
@@ -91,7 +92,8 @@ https://vpn.example.com:48391/abc123xyz0/login
 > **Совместимая стратегия для скиллов:** двухшаговый логин (см. §2.1)
 > с автодетектом — на v2.x работает «как раньше», на v3.0+ автоматически
 > подхватывает CSRF-токен. Альтернатива — Bearer-token (см. §2.4),
-> устойчивее, но требует ручного создания токена в UI.
+> устойчивее; токен выпускает скриптовая установка (`XUI_API_TOKEN` в
+> `/etc/x-ui/install-result.env`) или флаг `-getApiToken` бинарника (`3x-ui-panel.md` §4.1).
 
 ### 2.1 Логин с автодетектом CSRF (рекомендуемый путь)
 
@@ -189,15 +191,16 @@ curl -sS \
 - Управление: `GET/POST /panel/api/setting/apiTokens[/create|/delete/{id}|/setEnabled/{id}]`.
 - С v3.8.0 неверный или выключенный токен даёт 401. Запрос без `Authorization` по-прежнему
   получает 404 (с `X-Requested-With: XMLHttpRequest` 401), неверный webBasePath тоже 404.
+- Скриптовая установка выпускает токен сама (`XUI_API_TOKEN` в `/etc/x-ui/install-result.env`).
 
 Минусы:
-- Скриптовая установка выпускает токен сама (`XUI_API_TOKEN` в `/etc/x-ui/install-result.env`).
 - В v2.x и ранних v3.0 этого механизма нет — нужен fallback на
   username/password.
 
 **Когда что использовать в скиллах:**
-- В первой установке (скилл `/setup-vpn-panel`) — username/password,
-  потому что токена ещё нет.
+- В первой установке (скилл `/setup-vpn-panel`) — username/password, если установка шла
+  интерактивно; при неинтерактивной токен уже лежит в `/etc/x-ui/install-result.env`,
+  перенести в менеджер паролей и работать по Bearer.
 - В повторных запусках (`/configure-vpn-routing`, `/generate-client-config`)
   — если в `infra-config.json` (секция `vpn`) есть `panel_api_token` → использовать
   Bearer; иначе fallback на двухшаговый CSRF-логин.
@@ -666,7 +669,7 @@ api_call GET "/panel/api/server/getDb"
 
 Или отправка в Telegram:
 ```bash
-api_call POST "/panel/api/backuptotgbot"
+api_call POST "/panel/api/backuptotgbot"   # 3.x; на 2.8-2.9 GET
 ```
 
 ### 8.3 Загрузка бэкапа
@@ -730,7 +733,7 @@ https://{DOMAIN}:{PANEL_PORT}/{SUBSCRIPTION_PATH}/{SUB_ID}
 |---|---|
 | ≤ 2.x | Голый POST `/login` с username/password (как раньше). |
 | ≥ 3.0.0 | GET с куки → выдернуть `csrf-token` → POST `/login` с заголовком `x-csrf-token`. **ИЛИ** Bearer API-токен из UI. |
-| ≥ 3.0.2 | Доп. опция: несколько именованных Bearer-токенов с разными правами. |
+| ≥ 3.0.2 | Доп. опция: несколько именованных Bearer-токенов; scope и срок с v3.7.0 (§2.4). |
 
 Скилл должен **детектить версию автоматически**, а не требовать от
 оператора выбирать режим — это работа `api_login` в `_lib-api.sh`.
@@ -854,7 +857,8 @@ systemctl status x-ui | grep "active (running)" || echo "FAIL"
 
 ⚠️ **Свежие сборки 3X-UI (наблюдалось на MHSanaei/3x-ui `3.4.2`, 2026-07) — это
 одностраничное веб-приложение (SPA) с REST API, который ОТЛИЧАЕТСЯ от §1–14.** Старые
-`getXrayConfig` / `updateXrayConfig` / `addClient` возвращают **404**, клиенты стали
+`getXrayConfig` / `updateXrayConfig` (этих путей нет и в коде 2.8-2.9, §6) / `addClient`
+возвращают **404**, клиенты стали
 отдельной сущностью, часть тел — form, часть — JSON. Скилл ДОЛЖЕН определить вариант до работы.
 
 > **Источник:** реверс с живой панели 3.4.2 (AIOW, 2026-07-14) — греп JS-бандла (`assets/index-*.js`
@@ -862,7 +866,9 @@ systemctl status x-ui | grep "active (running)" || echo "FAIL"
 
 ### 15.1 Как отличить SPA-сборку
 - `GET /{WEB_PATH}/panel/xray` → HTML c `<script src=".../assets/index-*.js">` (SPA), не серверный шаблон.
-- `GET /panel/api/inbounds/getXrayConfig` → **404**; при этом работает `GET /panel/api/server/getConfigJson`.
+- `POST /panel/api/xray/` отвечает только на 3.x; на 2.8-2.9 этот раздел вне API (`POST /panel/xray/`,
+  по cookie), проверено по коду тегов v2.8.11 и v2.9.4. 404 на `inbounds/getXrayConfig` вариант не
+  различает: этого пути нет и в 2.8-2.9.
 - **Вход по API требует заголовок `Host: <домен панели>`** — стук на `127.0.0.1` без него → **403**
   (проверка Host). Локальную проверку делать через `curl --resolve домен:порт:127.0.0.1`.
 - `fork-check` по строке `MHSanaei/3x-ui` в бинаре НЕ различает варианты (SPA-сборка тоже её содержит) —
