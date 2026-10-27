@@ -326,7 +326,7 @@ pip — ничего трогать не надо.
 
 ## §6 Правила маршрутизации — вынесены в отдельный файл
 
-> 📍 **Полные правила (5 уровней: private → ads → geoip:ru → geosite:ru → regex
+> 📍 **Полные правила (5 уровней: private → ads → geoip:ru → geosite:category-ru → regex
 > по TLD → явный список РФ-доменов → default) живут в `routing-server-3xui.md`
 > §4-5.** Там же — порядок правил, sniffing и применение через REST API.
 >
@@ -393,7 +393,7 @@ interval 1440, strategy leastPing). 3X-UI подтянет все серверы
 
 ### 7.3 Routing rules на сервере
 
-Полный массив правил (private → ads → geoip:ru → geosite:ru → regex → явный
+Полный массив правил (private → ads → geoip:ru → geosite:category-ru → regex → явный
 список → default→upstream) — `routing-server-3xui.md` §4. **Маршрутизация теперь
 вся на сервере**, не на клиенте.
 
