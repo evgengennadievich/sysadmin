@@ -24,6 +24,7 @@ sources_checked:
   - https://github.com/MHSanaei/3x-ui/releases/tag/v3.7.0
   - https://github.com/MHSanaei/3x-ui/releases/tag/v3.5.0
   - https://github.com/MHSanaei/3x-ui/releases/tag/v3.3.1
+  - https://github.com/MHSanaei/3x-ui/blob/v3.3.1/internal/web/controller/xray_setting.go
   - https://github.com/MHSanaei/3x-ui/blob/main/docs/public/openapi.json
   - https://github.com/MHSanaei/3x-ui/blob/main/docs/content/docs/en/guide/installation.mdx
   - https://github.com/MHSanaei/3x-ui/blob/main/docs/content/docs/en/guide/first-login.mdx
@@ -77,7 +78,7 @@ flowchart LR
     subgraph Panel[3X-UI на VPS оператора]
       IN1[Inbound: vless-tcp<br/>:443, UUID-список]
       IN2[Inbound: mixed<br/>127.0.0.1:1080]
-      ROUTING[Routing rules<br/>geosite:ru → direct<br/>остальное → upstream]
+      ROUTING[Routing rules<br/>geosite:category-ru → direct<br/>остальное → upstream]
       OUT_D[Outbound: direct]
       OUT_U[Outbound: vless-upstream<br/>через провайдера / свой загр.VPS]
     end
@@ -130,10 +131,11 @@ flowchart LR
   без рестарта, сбрасывается при рестарте Xray или удалении целевого outbound; с v3.10.0
   переживает перезагрузку маршрутизации.
 
-> ⚠️ **Форма балансировщика в 3X-UI — только 4 поля** (подтверждено из исходника
-> `frontend/src/pages/xray/balancers/BalancerFormModal.tsx`, перепроверено 2026-10-27; полей
-> по-прежнему четыре):
-> `tag`, `strategy`, `selector`, `fallbackTag`. **Настройки sticky-гистерезиса
+> ⚠️ **Форма балансировщика в 3X-UI: четыре основных поля**
+> (`frontend/src/pages/xray/balancers/BalancerFormModal.tsx`, перепроверено 2026-10-27):
+> `tag`, `strategy`, `selector`, `fallbackTag`; при `strategy = leastLoad` добавляются
+> `expected`, `maxRTT`, `tolerance`, `baselines`, `costs` (есть и в v3.5.0).
+> **Настройки sticky-гистерезиса
 > («держись за сервер, пока его пинг не станет хуже быстрейшего на N мс») в панели
 > НЕТ** — ни в форме, ни в Observatory-редакторе. Такой порог-в-миллисекундах
 > существует только на КЛИЕНТЕ (sing-box `urltest.tolerance`, дефолт 50ms), не на
@@ -145,7 +147,7 @@ flowchart LR
 > 1. **selector из серверов ОДНОЙ страны** — тогда даже при failover страна не
 >    меняется, и платформы не банят аккаунт за «прыжки по странам» (актуальная
 >    угроза РФ-2026, см. `_live/frontline-ru.md`).
-> 2. **`probeInterval: "5m"` вместо дефолтного `1m`/`30s`** — реже переоценка,
+> 2. **`probeInterval: "5m"` вместо дефолтного `1m`**: реже переоценка,
 >    клиент дольше держится за один сервер, меньше «скачков» IP.
 > 3. Для **абсолютно** неизменного IP — один outbound в selector (или вообще без
 >    балансира). Минус: failover при падении только вручную.
@@ -258,7 +260,7 @@ v3.11.0, шаг назад v3.10.2 (14.10). С v3.8.0 установщик св�
 - ENV vars, влияющие на установку:
   - `XUI_MAIN_FOLDER` — директория установки (default: `/usr/local/x-ui`).
   - `XUI_SERVICE` — путь для systemd (default: `/etc/systemd/system`).
-- Установщик принимает **аргумент с версией**: `bash install.sh v3.0.2`.
+- Установщик принимает **аргумент с версией**: `bash install.sh v3.11.0`.
 
 ### 2.4 Docker-образ
 
