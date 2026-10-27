@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-08-26
+last_researched: 2026-10-27
 ttl_days: 60
 sources_checked:
   - https://sing-box.sagernet.org/clients/
@@ -35,6 +35,19 @@ sources_checked:
   - https://applecensorship.com/app-store-monitor/app/6746188973
   - https://amnezia.org/blog/amnezia-shutdown-digest-july-2026-russia
   - https://itunes.apple.com/search?term=Happ&country=ru&entity=software
+  - https://sing-box.sagernet.org/changelog/
+  - https://sing-box.sagernet.org/deprecated/
+  - https://sing-box.sagernet.org/clients/desktop/
+  - https://sing-box.sagernet.org/migration/
+  - https://apps.apple.com/us/app/sing-box-mt/id6785326793
+  - https://itunes.apple.com/lookup?id=6785326793&country=ru
+  - https://github.com/Happ-proxy/happ-desktop/releases
+  - https://github.com/Happ-proxy/happ-android/releases
+  - https://www.happ.su/main/ru
+  - https://play.google.com/store/apps/details?id=com.happproxy
+  - https://play.google.com/store/apps/details?id=io.nekohasekai.sfa
+  - https://f-droid.org/api/v1/packages/io.nekohasekai.sfa
+  - https://formulae.brew.sh/cask/sfm
 ---
 
 # Клиентские приложения: карта на 2026-08-26
@@ -46,7 +59,7 @@ sources_checked:
 > 🎯 **Основной рекомендованный клиент агента — `Happ`** («Happ — Proxy
 > Utility», happ.su). Кроссплатформенный (iPhone, Android, Windows, macOS, Linux),
 > на Xray-ядре, умеет on-device routing (§3.6). Hiddify, Karing, v2rayN, sing-box
-> (sing-box-vt/SFA), v2rayNG — **альтернативы**. Обоснование выбора — ADR-0007.
+> (sing-box MT/SFA), v2rayNG остаются **альтернативами**. Обоснование выбора в ADR-0007.
 >
 > **Про установку (важно, исправлено 2026-05-24):** в RU App Store сейчас нет ни
 > Happ, ни Hiddify. Поэтому для установки **любого** VPN-клиента на iPhone (если
@@ -97,17 +110,20 @@ sources_checked:
   установлен — не удалять (переустановить без смены региона не получится).
   **Happ удалялся трижды за 2026:** март; 24.06 (карточка «Proxy Utility Plus»,
   id6746188973, с 03.07 недоступна во всех регионах); 07.07 (по требованию РКН).
-  Оригинальная карточка **id6504287215 издателя Flyfrog LLC** живёт в US-регионе
-  (v5.6.0, обновление 22.07.2026).
+  Оригинальная карточка **id6504287215 издателя Flyfrog LLC** живёт в US- и KZ-регионах
+  (v6.2.0, обновление 26.10.2026). Сайт happ.su кнопками «Rus» ведёт на RU-карточки Happ Lite
+  (iOS, id6799917773) и Happ Proxy Utility (macOS, id6783623643); на 27.10.2026 обе отвечают 404,
+  поэтому ссылки «Rus» семье не отправлять без проверки.
   ⚠️ **Клоны.** По запросу «Happ» RU App Store выдаёт десяток подделок от посторонних
   издателей («Happ VPN Official» SPK TECH LTD, «Happ VPN ++» INTRADEI TOV, «Happ plus
   2026» Qinghai Yanqiao, «Happ VPN» PAUL PARVINDER и т.п.). Настоящий издатель только
   **Flyfrog LLC**; остальное не ставить, семье объяснять отдельно.
-  Есть в RU App Store на 26.08.2026: **Karing** (1.2.23.2607), **Shadowrocket** (2.2.90,
-  платный), **OneXray** (Yuan Dev LLC, клиент Xray-core, v26.8.4, не проверялся),
-  **sing-box MT** (Metamerism LLC, ядро 1.14.x, издатель и происхождение не проверены).
+  Есть в RU App Store на 27.10.2026: **sing-box MT** (официальный клиент sing-box, Metamerism LLC,
+  v1.14.8 от 24.10.2026; проект перенёс Apple-клиенты на новый аккаунт разработчика в 1.14.0, документация
+  sing-box ссылается на эту карточку), **Karing** (1.2.25.2802), **Shadowrocket** (2.2.92, платный),
+  **OneXray** (Yuan Dev LLC, клиент Xray-core, v26.10.5, не проверялся).
 - **Android** — `Happ` (основной) / `Hiddify` / `NekoBox` / `SFA` (sing-box
-  официальный) / `v2rayNG` (xray; stable 2.2.6 от 05.07.2026, 2.3.x пре-релизы). Happ — Google Play (`com.happproxy`) или APK
+  официальный) / `v2rayNG` (xray; stable 2.3.11 от 11.10.2026, интерфейс переведён на Jetpack Compose; 2.3.12-2.3.13 пре-релизы). Happ: Google Play (`com.happproxy`) или APK
   с happ.su; остальные — GitHub Releases / Google Play.
 - **macOS** — `Happ` (скачать с happ.su, основной) / `Hiddify` / `Karing` /
   sing-box CLI как brew-сервис.
@@ -144,6 +160,7 @@ sources_checked:
 | 3 июля 2026 | Карточка «Happ - Proxy Utility Plus» (id6746188973) исчезает во всех регионах (applecensorship.com) |
 | 7 июля 2026 | Оригинальный Happ удалён из RU App Store третий раз за год, по требованию РКН (Amnezia digest) |
 | 26 августа 2026 | Проверка App Store API: `sing-box-vt` (id6673731168) отсутствует и в US-регионе, проект мёртв на 1.11.4 |
+| 31 августа 2026 | sing-box 1.14.0: iOS- и tvOS-клиенты вернулись в App Store как **sing-box MT** (новый аккаунт разработчика Apple); пользователям sing-box VT нужно ставить новое приложение; SFM больше не выдаётся через Mac App Store, только standalone (Homebrew cask `sfm`, GitHub Releases) |
 
 **Источник по удалениям:** TechCrunch (2024-07-08), TheRegister (2024-09-26),
 9to5Mac (2024-09-28), TechRadar, NovayaGazeta (2026-03-31 — Apple официально
@@ -153,15 +170,15 @@ sources_checked:
 
 | Клиент | App Store ID | Ядро | Версия ядра | RU App Store |
 |---|---|---|---|---|
-| **Happ** | 6504287215 (Flyfrog LLC) | Xray-core (по умолч.) + опция sing-box | трекает свежий Xray | В RU App Store **нет** (удаления 03, 06, 07.2026); в US-регионе v5.6.0 от 22.07.2026. Клоны от других издателей не ставить |
+| **Happ** | 6504287215 (Flyfrog LLC) | Xray-core (по умолч.) + опция sing-box | трекает свежий Xray | В RU App Store **нет** (удаления 03, 06, 07.2026); в US/KZ v6.2.0 от 26.10.2026; RU-карточки с happ.su (id6799917773, id6783623643) на 27.10.2026 отвечают 404. Клоны от других издателей не ставить |
 | **Hiddify Proxy & VPN** | 6596777532 | hiddify-sing-box + Xray | приложение 4.1.1 (05.03.2026) | В RU App Store **нет** (API 26.08.2026); в US v4.0 |
-| **Karing** | 6472431552 | mihomo (clash.meta) + модифицированный sing-box | 1.2.23.2607 stable, 1.2.24 пре-релизы | **Есть** в RU App Store (API 26.08.2026) |
+| **Karing** | 6472431552 | mihomo (clash.meta) + модифицированный sing-box | 1.2.25.2802 stable (App Store 11.09.2026), 1.2.26.x пре-релизы | **Есть** в RU App Store (API 26.08.2026) |
 | **sing-box-vt** | 6673731168 | sing-box 1.11.x | 1.11.4 (24.02.2025) | **Удалён во всех регионах** (RU и US, API 26.08.2026); только уже установленные копии |
-| sing-box MT | 6785326793 | sing-box | 1.14.x (по карточке) | Есть в RU; издатель Metamerism LLC, происхождение не проверено |
+| **sing-box MT** (официальный SFI) | 6785326793 (Metamerism LLC) | sing-box (апстрим) | ветка 1.14, приложение v1.14.8 (24.10.2026) | **Есть** в RU, US, KZ (API 27.10.2026); официальность подтверждена документацией sing-box |
 | OneXray | 6745748773 | Xray-core | v26.8.4 | Есть в RU; издатель Yuan Dev LLC, не проверялся |
-| Streisand | 6450534064 | Xray-core | n/a | **УДАЛЕНО** ~28.03.2026 |
-| FoXray | 6448898396 | Xray-core | соответствует Xray | непроверено (под угрозой) |
-| v2RayTun | 6476628951 | Xray-core (версия трекает релизы) | n/a | **УДАЛЕНО** ~28.03.2026 |
+| Streisand | 6450534064 (ARCADIA ODYSSEY INC.) | Xray-core | приложение v1.6.77 (25.10.2026) | В RU **нет** (удалено ~28.03.2026); в US и KZ доступно (API 27.10.2026) |
+| FoXray | 6448898396 | Xray-core | n/a | **Нет** в RU, US, KZ (API 27.10.2026) |
+| v2RayTun | 6476628951 | Xray-core (версия трекает релизы) | n/a | **УДАЛЕНО** из RU ~28.03.2026; на 27.10.2026 карточки нет и в US/KZ (API) |
 
 > ⚠️ **Ключевой вывод по RU App Store (на 2026-05-24).** В российском App Store
 > сейчас **нет ни Happ, ни Hiddify** (наблюдение оператора 2026-05-24; happ.su
@@ -200,13 +217,14 @@ Routing rule `wifi_ssid` / `wifi_bssid` — **только iOS** (на macOS о�
 
 ### 2.4 Критическое: версии ядра внутри iOS-клиентов
 
-| Клиент | Версия ядра sing-box внутри | Отставание от мейнлайна (1.13.12) |
+| Клиент | Версия ядра sing-box внутри | Отставание от мейнлайна (1.14.4) |
 |---|---|---|
-| sing-box-vt | 1.11.4 (Feb 2025) | -2 минора (нет 1.12, 1.13 фич) |
+| sing-box MT | ветка 1.14 (приложение v1.14.8 от 24.10.2026, версия ядра внутри не сверена) | в пределах ветки 1.14 |
+| sing-box-vt | 1.11.4 (Feb 2025) | -3 минора (нет фич 1.12, 1.13, 1.14); снят из App Store, только старые копии |
 | Hiddify v4.1.1 (iOS) | непроверено (форк hiddify-sing-box) | предположительно 1.11-1.12 |
 | Karing (iOS) | непроверено | mihomo + sing-box-fork |
 
-**Это значит:** конфиги, использующие фичи sing-box 1.12+:
+**Это значит** для старых копий sing-box VT (ядро 1.11): конфиги, использующие фичи sing-box 1.12+:
 - `anytls` протокол — не работает на iOS.
 - Новый формат DNS-сервера `{type, server}` — на iOS только старый
   `{address}`.
@@ -214,9 +232,12 @@ Routing rule `wifi_ssid` / `wifi_bssid` — **только iOS** (на macOS о�
 - `evaluate` action — не работает (1.14+).
 - `package_name_regex` — Android-only (на iOS вообще нет).
 
-Скилл `/generate-client-config` при `platform=ios` **генерирует конфиги
-под совместимость с sing-box 1.11** (нижняя планка), используя только
-поля и фичи, доступные в этой ветке.
+Нижняя планка 1.11 относится только к уже установленным копиям sing-box VT. Новые установки на iOS
+идут через sing-box MT (ветка 1.14). В 1.14.0 legacy-формат DNS-серверов удалён, а ядро 1.11 не знает
+нового формата `{type, server}` (появился в 1.12), поэтому конфиг с явными DNS-серверами не может
+одновременно подходить VT 1.11 и клиентам 1.14+. Скилл `/generate-client-config` при `platform=ios`
+должен по умолчанию генерировать modern-профиль (1.12+), профиль под 1.11 только по явному запросу для
+старой копии VT. Сейчас скрипт скилла генерирует под 1.11, правка скилла отдельной задачей через `/dev`.
 
 ---
 
@@ -227,9 +248,9 @@ Routing rule `wifi_ssid` / `wifi_bssid` — **только iOS** (на macOS о�
 | Параметр | Значение |
 |---|---|
 | Repo | github.com/SagerNet/sing-box-for-android |
-| Developer на Google Play | Viral Tech, Inc. (та же связка что sing-box-vt iOS) |
+| Developer на Google Play | Metamerism (тот же издатель, что sing-box MT на iOS); v1.14.4 от 24.10.2026 |
 | F-Droid | io.nekohasekai.sfa |
-| F-Droid version | 1.13.11 (build 662, 24 апреля 2026, 91 MiB) |
+| F-Droid version | 1.14.3 (versionCode 743, F-Droid API 27.10.2026) |
 | Min Android | 6.0+ |
 | Google Play | 500K+ установок, рейтинг 3.9 |
 
@@ -243,8 +264,7 @@ Routing rule `wifi_ssid` / `wifi_bssid` — **только iOS** (на macOS о�
 |---|---|
 | Repo | github.com/MatsuriDayo/NekoBoxForAndroid |
 | Ядро | sing-box (форк с суффиксом `-neko`) |
-| Stable | 1.4.1 (30 октября 2025), sing-box `1.12.12-neko-1` |
-| Preview | pre-1.4.2-20260202-1 (2 февраля 2026), sing-box `1.12.19-neko-1` |
+| Stable | 1.4.2 (9 февраля 2026), sing-box `1.12.19-neko-1`; проект малоподдерживаемый, запросы функций не принимает |
 | Min Android | 5.0+ |
 | Поддерживаемые протоколы | Shadowsocks, VMess, VLESS, Trojan, Hysteria 1/2, TUIC, WireGuard, SOCKS, HTTP(S), SSH, AnyTLS, ShadowTLS, Trojan-Go, NaïveProxy, Mieru |
 | Доступность | **Только GitHub Releases** (нет в Google Play официально) |
@@ -291,8 +311,8 @@ GitHub Releases доступен в РФ без ограничений → не�
 | Repo | github.com/Happ-proxy/happ-android (репозиторий релизов/APK, не полный исходник) |
 | Разработчик | Flyfrog LLC (по данным App Store) |
 | Платформы | iOS, Android, macOS, Windows, Linux, TV (отдельный листинг id6748297274) |
-| Десктоп (Win/macOS/Linux) | скачать прямо с **happ.su** (https://www.happ.su/main/ru) — смена региона стора не нужна |
-| Google Play | com.happproxy |
+| Десктоп (Win/macOS/Linux) | скачать прямо с **happ.su** (https://www.happ.su/main/ru), смена региона стора не нужна. Релизы: github.com/Happ-proxy/happ-desktop, stable 4.5.4 от 14.10.2026 (`Happ.macOS.universal.dmg`, `setup-Happ.x64.exe` и `.arm64.exe`, deb/rpm/pkg.tar.zst для x64 и arm64); 4.6.0 от 23.10.2026 пре-релиз |
+| Google Play | com.happproxy; издатель на странице Veltrixor LLC (не Flyfrog LLC), v4.8.0 от 16.10.2026; happ.su сам ссылается на эту карточку (кнопки «Google Play» и «Android TV»), а также даёт APK с GitHub (`Happ-proxy/happ-android`, 4.9.0 от 22.10.2026) |
 | App Store (iOS/macOS) | id6504287215 — удалён в волне ~28.03.2026; на 2026-05-24 в RU App Store нет → ставить через смену региона (как и Hiddify, которого там тоже нет) |
 | Ядро по умолчанию | **Xray-core** (актуальная версия меняется с релизами — уточнять при необходимости) |
 | Опция sing-box / tun2proxy | На десктопе как TUN-движок; можно подложить свой sing-box-конфиг (`custom-tunnel-config`) |
@@ -406,8 +426,9 @@ GitHub Releases доступен в РФ без ограничений → не�
 **Вывод:** схема реализуема **только через импорт полного Xray-конфига** в Happ —
 в нём ты сам описываешь `balancer`+`observatory` на входном звене (быстрейший вход)
 и `streamSettings.sockopt.dialerProxy` на фиксированный exit (ровно как в
-`xray-mac-chain.md`). Xray это умеет, sing-box chain VLESS→VLESS — нет (issue
-SagerNet/sing-box#1562, «not planned»).
+`xray-mac-chain.md`). Xray это умеет. В sing-box цепочка VLESS→VLESS по документации тоже описана
+штатно (поле `detour`), но живым тестом у нас не проверялась; прежняя ссылка на SagerNet/sing-box#1562
+была ошибочной (см. `xray-mac-chain.md`).
 
 **Trade-off (важно):** при импорте полного Xray-JSON **нативный Happ-routing
 отключается** — весь split (geoip:ru→direct, ads→block) надо описать в том же
@@ -430,7 +451,7 @@ Xray-JSON, поля `DirectSites`/etc больше не действуют. То
 ### 4.1 sing-box CLI
 
 - Установка через Homebrew (`brew install sing-box`).
-- Версия — мейнлайн **v1.13.12** (15.05.2026), идентично Linux.
+- Версия: мейнлайн **v1.14.4** (24.10.2026), идентично Linux; Homebrew `sing-box` 1.14.4.
 - Запуск через `brew services start sing-box` или launchd plist.
 - Конкретный путь brew formulae и launchd plist — непроверено в офиц.доке,
   но это стандартные практики.
@@ -439,10 +460,10 @@ Xray-JSON, поля `DirectSites`/etc больше не действуют. То
 
 | Клиент | Доступ | Особенности |
 |---|---|---|
-| `sing-box-vt` (он же SFM) | App Store, тот же ID что iOS, macOS 13.0+ | Версия 1.11.4 (отстаёт) |
+| `SFM` (официальный) | только standalone: `brew install --cask sfm` или GitHub Releases SagerNet; в Mac App Store нет с 1.14.0; macOS 13.0+ | 1.14.4; профили и настройки старого приложения сами не переносятся (Migration 1.14.0) |
 | `Hiddify` | Mac Catalyst или отдельный DMG/PKG с GitHub | v4.1.1, требуется macOS 10.15+ |
 | `Karing` | Mac Catalyst, тот же ID что iOS | Cross-platform Flutter |
-| `FoXray` | App Store | Xray-core |
+| `FoXray` | **нет** в App Store RU/US/KZ (API 27.10.2026) | Xray-core |
 
 ### 4.3 Системная интеграция
 
@@ -458,7 +479,7 @@ Xray-JSON, поля `DirectSites`/etc больше не действуют. То
 ### 5.1 sing-box CLI
 
 - Скачать `sing-box-windows-amd64.zip` с GitHub Releases.
-- Версия — мейнлайн v1.13.12.
+- Версия: мейнлайн v1.14.4 (24.10.2026).
 - Запуск как Windows-сервис — через `nssm` или `sc create` (встроенного
   `install-service` нет).
 
@@ -470,6 +491,7 @@ Xray-JSON, поля `DirectSites`/etc больше не действуют. То
 | `Hiddify` | github.com/hiddify/hiddify-app | v4.1.1, .msix / .exe / portable |
 | `Karing` | github.com/KaringX/karing/releases | непроверено |
 | **NekoRay** (NekoBox для desktop) | github.com/qr243vbi/nekobox (NyameBox-форк) | Qt-приложение |
+| **sing-box for Desktop** (официальный, с 1.14.0) | github.com/SagerNet/sing-box/releases | Windows 10+ x64/x86/arm64 |
 
 ### 5.3 TUN-драйвер
 
@@ -499,8 +521,8 @@ Capabilities в systemd unit:
 
 - **Hiddify Desktop**: AppImage, .deb, .rpm для x86_64. v4.1.1, март 2026.
 - **Karing Linux**: AppImage / deb.
-- Стабильного нативного gtk/qt-клиента от SagerNet **нет**. Документация
-  sing-box для desktop помечает «Working in progress».
+- С sing-box 1.14.0 есть официальный **sing-box for Desktop** (Windows 10+ x64/x86/arm64,
+  Linux x64/arm64/armv7l), раздаётся через GitHub Releases SagerNet.
 
 ---
 
@@ -586,11 +608,11 @@ https://sub.example.com/<token>
 
 | Клиент | Версия ядра | Поколение |
 |---|---|---|
-| sing-box mainline CLI (Linux/Win/macOS) | 1.13.12 | Latest |
-| SFA (Android, F-Droid) | 1.13.11 | Latest |
-| NekoBox stable 1.4.1 | 1.12.12-neko-1 | -1 минор |
-| NekoBox preview 1.4.2 | 1.12.19-neko-1 | -1 минор |
-| sing-box-vt iOS/macOS | 1.11.4 | **-2 минора** |
+| sing-box mainline CLI (Linux/Win/macOS) | 1.14.4 (24.10.2026) | Latest; ветка 1.15 в alpha (1.15.0-alpha.13) |
+| SFA (Android) | 1.14.3 (F-Droid), 1.14.4 (GitHub, Google Play) | Latest |
+| sing-box MT (iOS/tvOS, официальный) | ветка 1.14 | Latest |
+| NekoBox stable 1.4.2 | 1.12.19-neko-1 | -2 минора |
+| sing-box-vt iOS/macOS | 1.11.4 | **-3 минора**, снят из App Store, только старые копии |
 | Hiddify v4.1.1 | непроверено (форк ветки 1.x) | предположительно 1.11-1.12 |
 | Karing | непроверено | вероятно близко к мейнлайну |
 
@@ -609,19 +631,21 @@ https://sub.example.com/<token>
 | Domain resolver (заменяет domain_strategy) | 1.12.0 |
 | reject с method (drop/reply) | 1.13.0 |
 | bypass action (Linux auto_redirect) | 1.13.0 |
-| evaluate action, tls_spoof | 1.14.0 (alpha) |
+| `evaluate` (DNS rule action), TLS spoof, `package_name_regex` | 1.14.0 (stable 31.08.2026) |
 
 ### 9.3 Стратегия совместимости для `/generate-client-config`
 
 | Целевая платформа | Нижняя планка ядра | Запрещённые фичи |
 |---|---|---|
-| iOS | sing-box 1.11.x | AnyTLS, TLS fragment, новый DNS-формат, evaluate, package_name |
+| iOS (sing-box MT, новые установки) | sing-box 1.14 | package_name* (Android-only), process_* (на iOS только в jailbreak-версии) |
+| iOS (старая копия sing-box VT) | sing-box 1.11.x | AnyTLS, TLS fragment, новый DNS-формат, evaluate, package_name; только по явному запросу |
 | Android (через Hiddify/NekoBox/SFA) | sing-box 1.12 | evaluate (1.14+) |
-| Desktop (через mainline CLI / Hiddify) | sing-box 1.13 | evaluate (1.14+ alpha) |
-| Универсальный (любая платформа) | sing-box 1.11.x | как iOS |
+| Desktop (через mainline CLI / Hiddify) | sing-box 1.13 | evaluate (1.14+) |
+| Универсальный (любая платформа) | sing-box 1.12, modern DNS {type, server} | фичи 1.13 и 1.14 из §9.2; legacy DNS запрещён, удалён в 1.14.0 |
 
-При сомнении — генерируется конфиг под **наинижшую планку** (iOS = 1.11),
-он точно сработает на остальных платформах.
+При сомнении генерируется конфиг под modern-профиль 1.12 (новый DNS-формат), он загружается на 1.12, 1.13 и 1.14,
+то есть везде, кроме старых копий sing-box VT на 1.11 (и, возможно, Hiddify: версия ядра внутри не проверена);
+для них legacy-профиль только по явному запросу.
 
 ---
 
