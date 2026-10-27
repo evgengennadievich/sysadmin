@@ -386,7 +386,7 @@ Mediazona проверила 10 000 самых популярных домено
 └── WARP outbound в Xray (см. §4)
 
 Цель: продержаться на iOS-клиенте
-├── Hiddify или Karing (sing-box внутри) → Reality без Vision, WebSocket, HTTPUpgrade
+├── Hiddify или Karing (sing-box внутри) → Reality (Vision по документации есть, совместимость с Xray не проверена, `transports.md` §12.1), WebSocket, HTTPUpgrade
 └── НЕ XHTTP — sing-box не поддерживает
 
 Цель: обойти DNS-блокировки в РФ
