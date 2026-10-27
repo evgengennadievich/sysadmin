@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-08-26
+last_researched: 2026-10-27
 ttl_days: 60
 sources_checked:
   - https://hiddify.com/app/URL-Scheme/
@@ -17,6 +17,10 @@ sources_checked:
   - https://www.ps.kz/agreements/vps-sla
   - https://equhost.kz/public_offer/
   - https://www.anthropic.com/supported-countries
+  - https://github.com/MHSanaei/3x-ui/releases
+  - https://github.com/MHSanaei/3x-ui/pull/5826
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.8.0
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.8.5
 ---
 
 # VPN-консультация: подбор архитектуры по «дано» (HUB)
@@ -129,9 +133,10 @@ TUN-режим, расширения и FAQ. **Сами правила марш�
 - Linux — Happ (с happ.su) / Hiddify Desktop / sing-box CLI
 ```
 
-> ⚠️ **Установка на iPhone (2026-05-24):** в RU App Store сейчас нет ни Happ, ни
+> ⚠️ **Установка на iPhone (сверено по `client-apps.md`, состояние на 26.08.2026):** в RU App Store нет ни Happ, ни
 > Hiddify — для установки любого клиента на iPhone (если его ещё нет) нужна
 > **смена региона App Store**. На десктоп Happ ставится просто с **happ.su**.
+> По запросу «Happ» RU App Store выдаёт клоны; ставить только карточку издателя Flyfrog LLC (`client-apps.md` §1).
 
 Клиент здесь не настраивает правила (они на сервере) — только импортирует
 подписку и включает TUN. См. `client-apps.md` для деталей по каждой платформе и
@@ -383,7 +388,8 @@ pip — ничего трогать не надо.
 
 В 3X-UI: **Xray Settings → Outbounds → Add Subscription** (URL подписки, update
 interval 1440, strategy leastPing). 3X-UI подтянет все серверы провайдера и будет
-ротировать по latency. Детали балансировщика/observatory — `3x-ui-panel.md` §1.3-1.4.
+ротировать по latency. У outbound-подписки свой User-Agent задаётся в её строке, с 3.8.0.
+Детали балансировщика/observatory: `3x-ui-panel.md` §1.3-1.4.
 
 ### 7.3 Routing rules на сервере
 
@@ -414,6 +420,10 @@ SOCKS5 на 127.0.0.1:1080 → попадает в тот же routing → outbo
 https://твой-сервер.ru:2096/sub/abc123def456
 ```
 
+Путь `/sub/` здесь условный: с 3X-UI 3.8.0 новая база панели получает случайные пути
+подписки (base64, JSON, Clash) вместо общеизвестных. Ссылку берём из панели или из
+`/generate-client-config`, руками не собираем.
+
 ### 8.2 Что содержит подписка (при server-side модели)
 
 > Ключевое отличие от старой модели: при маршрутизации на сервере подписка отдаёт
@@ -425,15 +435,23 @@ inbound-ов клиента. Клиент подключается к серве
 сервере (`routing-server-3xui.md`). Никаких sing-box-JSON-шаблонов с правилами в
 подписке не требуется.
 
+Оговорка: с 3.6.0 в панели есть автоопределение формата по User-Agent (Clash/Mihomo
+получают YAML, распознанные клиенты получают JSON-массив). По умолчанию оно выключено;
+v2rayNG и нераспознанные клиенты получают прежний base64. Включено ли оно у оператора,
+смотрим в настройках подписки панели.
+
 Генерация — скилл `/generate-client-config`: прямая ссылка + QR-код. Детали
 формата подписки — `client-apps.md` §7-8, `3x-ui-api.md` §9.
 
 ### 8.3 Импорт в клиент
 
 Универсально для любого клиента (Happ/Hiddify/Karing/SFA/v2rayN):
-1. Открыть ссылку подписки в браузере — большинство клиентов подхватят по
-   URL-scheme; либо
-2. Открыть клиент → Add Profile / Import → From URL → вставить ссылку.
+1. Открыть клиент, Add Profile / Import, From URL, вставить ссылку (основной путь).
+2. Для телефона подойдёт QR-код из `/generate-client-config`.
+
+В браузере ссылка 3X-UI открывает HTML-страницу подписки (по `Accept: text/html`, либо
+`?html=1` / `?view=html`); с 3.8.5 на ней есть кнопки импорта для Android, iOS и Windows.
+Какие клиенты подхватывают такой импорт, не проверено, поэтому основной путь остаётся From URL.
 
 ### 8.4 Обновление подписки
 
