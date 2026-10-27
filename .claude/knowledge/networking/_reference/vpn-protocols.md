@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-08-26
+last_researched: 2026-10-27
 ttl_days: 60
 sources_checked:
   - https://github.com/XTLS/REALITY
@@ -23,6 +23,10 @@ sources_checked:
   - https://amnezia.org/blog/amnezia-shutdown-digest-july-2026-russia
   - https://github.com/MHSanaei/3x-ui/releases
   - https://github.com/XTLS/Xray-core/discussions/5568
+  - https://github.com/XTLS/Xray-core/releases/tag/v26.10.21
+  - https://github.com/SagerNet/sing-box/releases
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.11.0
+  - https://github.com/apernet/hysteria/releases
 ---
 
 # VPN-протоколы: карта и применимость
@@ -352,11 +356,15 @@ Yandex-сервисы, Ozon/Wildberries/Avito, банки и телеком-оп
   соединения (меньше рукопожатий). Рабочая связка: **VLESS + XHTTP + Reality**,
   один uTLS-отпечаток раз и навсегда. Детали и конфиги: `transports.md` §3, §13.6.
 
-**Версии на 2026-08-26.** Xray-core: последний стабильный v26.3.27 (27.03.2026),
-пре-релизы до v26.7.28 (28.07.2026, breaking change по XMC finalmask). С января 2026
-VLESS без flow объявлен deprecated, введено VLESS Encryption (`xray vlessenc`,
-постквантовое; discussion #5568). sing-box: 1.13.19 stable, 1.14.0-rc.1. 3X-UI: 3.7.0
-(24.08.2026, нативный AmneziaWG 3.1, scoped API-токены). Hysteria: 2.12.2.
+**Версии на 2026-10-27.** Xray-core: v26.10.21 (21.10.2026) помечен latest, это первый
+выпуск не в статусе пре-релиза после v26.3.27. Выпуск срочный: из встроенного набора
+корневых сертификатов убраны три корня после взлома ключей индийских промежуточных CA,
+v26.10.10 и v26.10.17 отозваны, полные release notes мейнтейнер обещал к концу октября
+или началу ноября. После v26.7.28 вышли пре-релизы v26.9.9 (08.09.2026) и v26.9.30
+(30.09.2026). С января 2026 VLESS без flow объявлен deprecated, введено VLESS Encryption
+(`xray vlessenc`, постквантовое; discussion #5568). sing-box: 1.14.4 stable (24.10.2026;
+ветка 1.14 стабильна с 31.08.2026), 1.15.0-alpha.13. 3X-UI: 3.11.0 (25.10.2026, ядро
+v26.10.21). Hysteria: 2.13.0 (05.10.2026).
 
 ---
 
