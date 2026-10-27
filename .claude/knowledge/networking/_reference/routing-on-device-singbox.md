@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-08-26
+last_researched: 2026-10-27
 ttl_days: 60
 sources_checked:
   - https://sing-box.sagernet.org/configuration/route/
@@ -12,6 +12,10 @@ sources_checked:
   - https://sing-box.sagernet.org/changelog/
   - https://sing-box.sagernet.org/deprecated/
   - https://itunes.apple.com/lookup?id=6785326793&country=ru
+  - https://sing-box.sagernet.org/migration/
+  - https://sing-box.sagernet.org/clients/apple/
+  - https://github.com/throneproj/Throne/releases
+  - https://itunes.apple.com/lookup?id=6673731168&country=ru
 ---
 
 # Гибкая маршрутизация НА УСТРОЙСТВЕ через sing-box — для энтузиастов
@@ -48,7 +52,8 @@ sing-box, а не на сервере. Дефолт — серверная ма�
    устройстве — sing-box.** Hiddify не даёт править сырой route руками (строит
    из подписки сам, см. `client-apps.md`). То есть выбора клиентов мало.
 3. **Состояние sing-box-клиентов на 2026-05-22 неровное** (см. §3): на iOS —
-   только устаревшее ядро 1.11, на десктопе/Android — свежее, но требует
+   свежее ядро снова в App Store (sing-box MT, ветка 1.14, с 31.08.2026), ядро 1.11 осталось только
+   в старых копиях VT; на десктопе и Android ядро свежее, но требует
    разобраться с raw JSON.
 4. **Раскол формата ядра 1.11↔1.12** (см. §2) — главная засада «одного конфига
    на все устройства».
@@ -92,27 +97,29 @@ sing-box, а не на сервере. Дефолт — серверная ма�
 
 ## §2 Раскол формата ядра 1.11 ↔ 1.12 — главная засада
 
-Последняя stable ядра sing-box — **1.13.19 (17.08.2026)**, 1.14.0-rc.1 вышел 24.08.2026. Но клиенты сидят на
+Последняя stable ядра sing-box: **1.14.4 (24.10.2026)**; 1.14.0 вышел 31.08.2026, ветка 1.15 в alpha (1.15.0-alpha.13). Но клиенты сидят на
 разных версиях, и между 1.11 и 1.12 сломался формат конфига. Ключевые рубежи:
 
 | Версия | Что сломалось в формате |
 |---|---|
 | 1.11.0 (2025-01-30) | rule actions: `type:"block"`/`type:"dns"` → `action:"reject"`/`"hijack-dns"` |
 | **1.12.0 (2025-08-04)** | **Формат DNS:** старое `dns.servers[].address` (строка-URL) → новое `{type, server}`. WireGuard outbound → endpoints |
-| 1.13.0 (2026-02-28) | legacy DNS-форматы deprecated, удаление в 1.14.0 |
-| 1.14.0 (rc.1, 24.08.2026) | полное удаление legacy DNS-формата; legacy special outbounds (`block`/`dns`) удалены ещё в 1.13.0. Stable ожидается в ближайшие недели |
+| 1.13.0 (2026-02-28) | legacy special outbounds (`block`/`dns`) удалены; legacy DNS-форматы помечены deprecated ещё в 1.12.0, удаление в 1.14.0 |
+| **1.14.0 (2026-08-31)** | legacy-формат DNS-серверов удалён; legacy special outbounds (`block`/`dns`) удалены ещё в 1.13.0. Помечены устаревшими с удалением в 1.16.0: `download_detour` у remote rule-set (замена `http_client`), неявный HTTP-клиент для remote rule-set (задать `http_clients` и `route.default_http_client` явно), legacy `strategy` в DNS rule action, `independent_cache`, `store_rdrc`, legacy address filter fields в DNS-правилах. Уточнена семантика ссылки на rule-set: слитное сопоставление только для rule-set из одного `default`-правила без `invert`, остальные сопоставляются как отдельное поле |
+| 1.15.0 (alpha) | TUN-опция `stack` deprecated, удаление в 1.17.0 (свой TCP/IP-стек sing-tun) |
 
-**Практическое следствие — два DNS-профиля.** «Один конфиг на все устройства»
-не работает, если в парке есть iOS на застрявшем 1.11 (см. §3):
+**Практическое следствие: два DNS-профиля.** «Один конфиг на все устройства»
+не работает, если в парке осталась старая копия sing-box VT на 1.11 (см. §3):
 
 - **legacy-профиль** (DNS строкой `"address":"https://1.1.1.1/dns-query"`,
-  `"address":"local"`) — для iOS/macOS на ядре 1.11 и для Hiddify;
-- **modern-профиль** (`{"type":"https","server":"1.1.1.1"}`) — для
-  Android/desktop на ядре 1.12+.
+  `"address":"local"`): только для старых копий VT на ядре 1.11 и, возможно, Hiddify;
+- **modern-профиль** (`{"type":"https","server":"1.1.1.1"}`): для всех остальных,
+  включая iOS (sing-box MT), Android и desktop на ядре 1.12+.
 
-Legacy-формат ещё принимается ядрами 1.12-1.13 с deprecation-warning, но
-**сломается в stable 1.14.0**. То есть «один legacy-конфиг на всех» — рабочая, но
-временная стратегия.
+Legacy-формат принимают только ядра 1.12-1.13 (с deprecation-warning); на 1.14+ (SFA 1.14.x, SFM,
+sing-box MT, CLI) конфиг с ним не загрузится. Стратегия «один legacy-конфиг на всех» закрыта:
+legacy-профиль нужен только старым копиям VT 1.11 (и, возможно, Hiddify, версия ядра внутри не
+проверена), всем остальным modern-профиль.
 
 Полная карта «какая фича с какой версии» — `client-apps.md` §9.2.
 
@@ -124,24 +131,21 @@ Legacy-формат ещё принимается ядрами 1.12-1.13 с depr
 
 | Платформа | Клиент | Ядро | Raw JSON руками? | Заметка |
 |---|---|---|---|---|
-| **iOS** | SFI (офиц.) | свежее (TestFlight) | да, полностью | TestFlight только спонсорам |
+| **iOS** | sing-box MT (= SFI, офиц.) | ветка 1.14 (приложение v1.14.8 от 24.10.2026, версия ядра внутри не сверена) | да, полностью (локальный или удалённый конфиг) | App Store, есть и в RU; TestFlight-бета по-прежнему только спонсорам |
 | **iOS** | sing-box VT | **1.11.4 (заморожен)** | да, полностью | **Удалён из App Store во всех регионах** (API 26.08.2026); живут только установленные копии, для них legacy-формат |
-| **iOS** | sing-box MT (Metamerism LLC, id6785326793) | 1.14.x по карточке | не проверено | Появился в RU App Store; издатель и происхождение не проверены, перед рекомендацией семье проверить |
 | **iOS** | Karing | модиф. sing-box | модель «подписка», не подтверждено | App Store, активный |
-| **Android** | SFA (офиц.) | **апстрим 1.13.x** | да, полностью | эталон стабильности, GitHub APK |
+| **Android** | SFA (офиц.) | **апстрим 1.14.x** | да, полностью | эталон стабильности, GitHub APK |
 | **Android** | NekoBox | форк 1.12.x | **максимум** (3 слоя инъекции JSON) | краши в фоне, редкие апдейты |
 | **Android** | husi | форк | модель NekoBox | живее NekoBox, Codeberg |
 | **Desktop** | GUI.for.SingBox | **версия выбирается вручную** | да (Script-хук) | главный выбор для десктопа |
-| **Desktop** | SFM (офиц.) | каноничное 1.13.x | да (внешний редактор) | `brew install --cask sfm` |
-| **Desktop** | Throne | sing-box 1.13.12 | да, прямой доступ | форк nekoray, Qt |
+| **Desktop** | SFM (офиц., macOS) | апстрим 1.14.x | да (внешний редактор) | только standalone: `brew install --cask sfm` или GitHub |
+| **Desktop** | Throne | 1.3.2 (29.09.2026), версия ядра не проверена | да, прямой доступ | форк nekoray, Qt |
+| **Desktop (Win/Linux)** | sing-box for Desktop (офиц., с 1.14.0) | апстрим 1.14.x | не проверено | GitHub Releases SagerNet |
 
-**Ключевая боль iOS:** официальный SFI в App Store не обновляется, VT застрял на
-1.11.4 и с лета 2026 удалён из стора (обновление 2026-08-26: тезис «на iOS только ядро
-1.11» верен для уже установленных копий VT; новых установок VT не бывает, кандидат на
-свежее ядро sing-box MT не проверен). То есть на iPhone через App Store доступно только **ядро 1.11** → нижняя
-планка совместимости для «общего» конфига = 1.11. Свежее ядро на iOS — только
-через TestFlight (спонсорство) или Karing (своя модель). На десктопе/Android
-проблема снимается полностью.
+**iOS (обновлено 2026-10-27):** боль снята. Официальный клиент вернулся в App Store как sing-box MT
+(новый аккаунт разработчика, sing-box 1.14.0 от 31.08.2026), он есть и в RU App Store. VT застрял на
+1.11.4 и снят из стора; его пользователям ставить MT. Нижняя планка общего конфига теперь 1.12
+(modern DNS `{type, server}`): legacy DNS удалён в 1.14.0, и на клиентах 1.14+ legacy-конфиг не загрузится.
 
 ---
 
@@ -162,8 +166,9 @@ Legacy-формат ещё принимается ядрами 1.12-1.13 с depr
 - Лимит памяти Network Extension на iOS **~50 МБ** → jetsam-краши на speedtest
   100+ Мбит/с. Общая боль всех sing-box-клиентов на iOS, не зависит от приложения.
 
-Для `/generate-client-config` при `platform=ios` — не использовать
-`strict_route`, `process_name`; писать DNS в legacy-формате (ядро 1.11);
+Для `/generate-client-config` при `platform=ios`: не использовать
+`strict_route`, `process_name`; DNS писать в modern-формате `{type, server}` (sing-box MT, 1.12+),
+legacy-формат (ядро 1.11) только по явному запросу для старой копии VT;
 маршрутизация только через rule_set + ip_cidr + domain_*.
 
 ---
@@ -173,23 +178,23 @@ Legacy-формат ещё принимается ядрами 1.12-1.13 с depr
 Полный список с версиями — итог сегодняшнего исследования. Кратко:
 
 **iOS:**
-- SFI (офиц.): https://github.com/SagerNet/sing-box-for-apple — TestFlight только спонсорам (Telegram @yet_another_sponsor_bot)
-- sing-box VT: https://apps.apple.com/app/id6673731168 (ядро 1.11.4; доступность в РФ App Store — проверять вручную)
+- sing-box MT (офиц. SFI, App Store, есть в RU): https://apps.apple.com/app/sing-box-mt/id6785326793; TestFlight-бета только спонсорам (Telegram @yet_another_sponsor_bot)
+- sing-box VT: https://apps.apple.com/app/id6673731168 (ядро 1.11.4; в App Store RU, US, KZ нет по API 27.10.2026, новых установок нет)
 - Karing: https://apps.apple.com/us/app/karing/id6472431552
 
 **Android:**
-- SFA (офиц., v1.13.12): https://github.com/SagerNet/sing-box/releases → `SFA-1.13.12-universal.apk` (брать с GitHub SagerNet — в Google Play издатель указан как Viral Tech)
+- SFA (офиц., v1.14.4): https://github.com/SagerNet/sing-box/releases (брать с GitHub SagerNet; в Google Play издатель указан как Metamerism)
 - NekoBox (v1.4.2): https://github.com/MatsuriDayo/NekoBoxForAndroid/releases
 - husi (v1.2.0): https://codeberg.org/xchacha20-poly1305/husi/releases (GitHub-зеркало заморожено на 1.0.2 — брать с Codeberg)
 
 **Desktop (главный выбор — GUI.for.SingBox):**
-- GUI.for.SingBox (v1.24.1): https://github.com/GUI-for-Cores/GUI.for.SingBox/releases — `.zip` под darwin-arm64/amd64, windows, linux-amd64. Версия ядра выбирается внутри приложения (вкладка Kernel)
-- SFM (офиц., macOS): `brew install --cask sfm` ✅ или https://github.com/SagerNet/sing-box/releases/latest (`SFM-1.13.12-Universal.pkg`)
-- Throne (v1.1.3, sing-box 1.13.12): https://github.com/throneproj/Throne/releases
+- GUI.for.SingBox (v1.28.1 от 21.10.2026): https://github.com/GUI-for-Cores/GUI.for.SingBox/releases; версия ядра выбирается внутри приложения (вкладка Kernel)
+- SFM (офиц., macOS, 1.14.4): `brew install --cask sfm` или https://github.com/SagerNet/sing-box/releases/latest; в Mac App Store больше нет
+- Throne (1.3.2 от 29.09.2026; 1.4.0-beta.x): https://github.com/throneproj/Throne/releases
 - sing-box CLI: `brew install sing-box` ✅ / Linux пакеты на https://sing-box.sagernet.org/installation/package-manager/
 
-Не подтверждено (проверять вручную): доступность VT в РФ App Store; точный
-TestFlight-URL SFI; Homebrew cask для GUI.for.SingBox/Throne/Karing.
+Не подтверждено (проверять вручную): точный TestFlight-URL беты sing-box MT (SFI);
+Homebrew cask для GUI.for.SingBox/Throne/Karing.
 
 ---
 
@@ -199,8 +204,8 @@ TestFlight-URL SFI; Homebrew cask для GUI.for.SingBox/Throne/Karing.
 |---|---|---|
 | macOS | GUI.for.SingBox (+ SFM для отладки) | сам выбираешь версию ядра, Script-хук = полный контроль route |
 | Windows/Linux | GUI.for.SingBox | одна кодовая база, raw route через Script |
-| Android | SFA (стабильность) или NekoBox (правка JSON в приложении) | SFA = чистое 1.13; NekoBox = глубже, но краши в фоне |
-| iOS | SFI через TestFlight, иначе sing-box VT (legacy-конфиг 1.11) | произвольный raw JSON едят только эти двое |
+| Android | SFA (стабильность) или NekoBox (правка JSON в приложении) | SFA = чистое 1.14; NekoBox = глубже, но краши в фоне |
+| iOS | sing-box MT (App Store, в том числе RU) | официальный клиент, свежее ядро, локальный или удалённый raw-конфиг |
 
 ---
 
