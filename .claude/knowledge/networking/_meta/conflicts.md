@@ -66,6 +66,9 @@ B — в других; или появился HIGH-источник, опров
 
 ### КОНФЛИКТ-002: REALITY + Vision в sing-box — поддерживается или нет?
 
+**Статус:** ЗАКРЫТ 2026-10-27 по сверке `/refresh-vpn-knowledge LAYER=reference` (пункты
+A7, A8, A12), см. «Текущее решение в базе» и §3.
+
 **Дата фиксации:** 2026-05-17
 **Где зафиксировано в базе:** `_reference/transports.md` §12.1
 
@@ -87,16 +90,28 @@ B — в других; или появился HIGH-источник, опров
 - Гипотеза 1: Vision/XTLS — **парсится конфигом для совместимости URI**, но реально не активируется (silent no-op).
 - Гипотеза 2: Реализован частично — в outbound может, в inbound — нет.
 - Гипотеза 3: Документация отстаёт от кода.
+- Разбор 2026-10-27: гипотеза 1 (silent no-op) опровергается реализацией Vision в
+  `SagerNet/sing-vmess/vless/vision.go`; гипотеза 2 не подтверждается:
+  `flow: xtls-rprx-vision` описан и у inbound, и у outbound VLESS. Источник B прочитан неверно:
+  TLS shared-страница описывает `reality` для клиента и сервера и не помечает его
+  deprecated, ограничение по полю `engine` (движки `apple` и `windows`, с 1.14.0) касается
+  только клиента.
 
 **Текущее решение в базе:**
-- [x] помечено `? уточнить (не подтверждено: 2026-05-17)` — в `transports.md` §12.1 явно указано «требует подтверждения от maintainer-ов sing-box».
-- Практическая рекомендация: для REALITY+Vision-сервера использовать Xray-клиентов (FoxRay, v2rayN); REALITY без Vision — sing-box работает.
+- [x] конфликт закрыт 2026-10-27 (пункт A12, `transports.md` §12 и §12.1): REALITY в
+  sing-box поддержан, на клиенте только с движком `go`; `xtls-rprx-vision` указан значением
+  `flow` для inbound и outbound VLESS; утверждение источника C официальной документацией и
+  кодом не подтверждается.
+- Практическая рекомендация (`transports.md` §12.1): по документации sing-box
+  поддерживает REALITY+Vision; совместимость Vision между sing-box и Xray живым тестом не
+  проверена, пока её нет, для REALITY+Vision-сервера надёжнее Xray-клиенты.
 
 **Что прояснит:**
 - Запустить experiment с REALITY+Vision-сервером, подключиться sing-box и Xray, сравнить TLS-fingerprint выхода (Wireshark).
 - Issue на github.com/SagerNet/sing-box с прямым запросом к maintainer-ам.
 
-**Дата следующей проверки:** при первом `/refresh-vpn-knowledge LAYER=reference` (раз в 60 дней).
+**Дата следующей проверки:** не нужна, конфликт закрыт; открытым остаётся только живой
+тест совместимости Vision между sing-box и Xray (эксперимент выше).
 
 ---
 
@@ -171,6 +186,8 @@ B — в других; или появился HIGH-источник, опров
 
 ### КОНФЛИКТ-005: probeInterval серверного observatory — 30s или 5m?
 
+**Статус:** ЗАКРЫТ 2026-10-27, принятое значение `5m`, см. «Текущее решение в базе» и §3.
+
 **Дата фиксации:** 2026-06-15
 **Где зафиксировано в базе:** `_reference/3x-ui-panel.md` §1.4, `_reference/routing-server-3xui.md` §3.3, `_reference/happ-subscription-format.md` §5
 
@@ -187,13 +204,21 @@ B — в других; или появился HIGH-источник, опров
 - Разные цели: 30s — быстрый отклик на падение узла; 5m — стабильность выхода (для нейросетей нужен 5m).
 
 **Текущее решение в базе:**
-- [x] помечено `? уточнить` — `happ` §5 ссылается на канон 5m (`3x-ui-panel` §1.4); `routing-server-3xui` §3.3 требует ревизии 30s→5m.
+- [x] конфликт закрыт 2026-10-27: принятое значение серверного `probeInterval` равно `5m`,
+  как в `3x-ui-panel.md` §1.4 и в `PROBE_INTERVAL` у `/configure-vpn-routing`; дефолт
+  панели `1m`. Значение 30s в `routing-server-3xui.md` §3.3 считать отставшим.
 
 **Что прояснит:** ревизия `routing-server-3xui` §3.3 — привести к 5m или явно обосновать 30s в его контексте.
 
-**Дата следующей проверки:** при первом `/refresh-vpn-knowledge LAYER=reference`.
+**Дата следующей проверки:** не нужна, конфликт закрыт.
 
-**Связанная путаница (`pingConfig`):** `pingConfig` устарел ВНУТРИ `observatory` (заменён `probeUrl`/`probeInterval`, `3x-ui-panel` §1.4), но штатен ВНУТРИ `burstObservatory` (`happ` §5). Это разные модули, не противоречие — разведено в `happ-subscription-format.md` §5.
+**Связанная путаница (`pingConfig`):** `pingConfig` не устаревшее поле `observatory`, а
+подобъект `burstObservatory` (`happ` §5). У `observatory` свои поля `probeURL` (в
+документации `probeUrl`) и `probeInterval`, заменой `pingConfig` они не являются. Прежняя
+формулировка «`pingConfig` устарел внутри `observatory`, заменён `probeUrl`» неверна
+(исправлено 2026-10-27; источники:
+https://github.com/XTLS/Xray-core/blob/main/infra/conf/observatory.go,
+https://xtls.github.io/en/config/observatory.html).
 
 ---
 
@@ -280,7 +305,14 @@ XHTTP-конфигурации. Конфликт не закрыт: собств
 
 ## §3 Разрешённые конфликты (history)
 
-(пока пусто)
+Закрытые записи оставлены на месте в §2 с пометкой «ЗАКРЫТ», здесь указатель:
+
+- **КОНФЛИКТ-002** (REALITY + Vision в sing-box), закрыт 2026-10-27: официальная
+  документация описывает `reality` для клиента и сервера (ограничение по `engine` только
+  для клиента) и `flow: xtls-rprx-vision` для inbound и outbound VLESS; реализация в
+  `SagerNet/sing-vmess/vless/vision.go`.
+- **КОНФЛИКТ-005** (`probeInterval` серверного observatory), закрыт 2026-10-27: принято
+  `5m`, дефолт панели `1m`.
 
 ---
 
