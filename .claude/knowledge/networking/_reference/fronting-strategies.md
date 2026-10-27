@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-08-26
+last_researched: 2026-10-27
 ttl_days: 60
 sources_checked:
   - https://blog.cloudflare.com/russian-internet-users-are-unable-to-access-the-open-internet/
@@ -23,6 +23,10 @@ sources_checked:
   - https://news.risky.biz/risky-biz-news-russia-blocks-cloudflare-ech-connections/
   - https://enterno.io/en/articles/cloudflare-in-russia
   - https://habr.com/ru/articles/1047442/
+  - https://github.com/XTLS/Xray-core/pull/5645
+  - https://github.com/XTLS/Xray-core/pull/6878
+  - https://github.com/XTLS/Xray-core/pull/7140
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.10.0
 ---
 
 # Fronting-стратегии: маскировка под легитимный трафик
@@ -168,6 +172,25 @@ Cloudflare-IP — не подаётся.
 - Использовать ArvanCloud как fronting для РФ-обхода — **не имеет смысла** (он
   специализирован под Иран, на Запад идёт окольно).
 
+### 3.4 XDRIVE: трафик под видом работы с облачным хранилищем
+
+Новый класс маскировки в Xray-core (PR #5645 и #6748, влиты 19.09.2026; есть в v26.9.30
+и v26.10.21). Клиент и сервер обмениваются данными не напрямую, а через файлы в чужом
+легальном сервисе: Google Drive, локальная папка или HTTP-API хранилища, описанный
+шаблоном. Для цензора это обращения к облачному хранилищу, а не к VPS. Мейнтейнер прямо
+называет цель: обход IP-белых списков для России и Ирана; серверу не нужен публичный IP.
+
+Ограничения:
+- с PR #7182 (17.10.2026) только VLESS с VLESS Encryption без flow, mux на клиенте
+  обязателен;
+- ключ доступа к хранилищу лежит на клиенте, поэтому вариант только для своих, не для
+  раздачи; IP клиента сервер не видит;
+- работоспособность из РФ замером не подтверждена, доступность выбранного хранилища из
+  РФ и с мобильных сетей при белых списках надо проверять отдельно.
+
+Родственное: XDNS finalmask с PR #7140 (15.10.2026) умеет DoH с domain fronting и
+Chrome Client Hello по умолчанию.
+
 ---
 
 ## §4 Cloudflare WARP как outbound
@@ -220,6 +243,13 @@ HIGH: [xtls.github.io/document/level-2/warp](https://xtls.github.io/en/document/
 ```
 
 WARP secret keys получаются через `warp-cli` на сервере, затем переносятся в Xray-конфиг.
+
+**WARP через MASQUE (с октября 2026).** С PR #6878 (08.10.2026) MASQUE-клиент Xray
+подключается к Cloudflare WARP: в `masqueSettings` появился объект `warp`, его заполняют
+из регистрации устройства WARP, так же как ключи WireGuard. 3X-UI 3.10.0 умеет
+регистрировать WARP по MASQUE и создаёт готовый outbound `warp-masque`, прежнюю
+WireGuard-регистрацию при этом не трогает. Это по-прежнему outbound для VPS, вывод §4.2
+не меняется; работу WARP по MASQUE из РФ не замерял.
 
 ### 4.4 Известные проблемы (VPNDada troubleshooting)
 
