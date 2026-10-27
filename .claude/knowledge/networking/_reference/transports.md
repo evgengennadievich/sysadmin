@@ -1,7 +1,7 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-08-26
+last_researched: 2026-10-27
 ttl_days: 60
 sources_checked:
   - https://xtls.github.io/en/config/transport.html
@@ -58,6 +58,28 @@ sources_checked:
   - https://github.com/XTLS/Xray-core/discussions/5568
   - https://github.com/XTLS/Xray-core/discussions/5847
   - https://github.com/MHSanaei/3x-ui/releases
+  - https://github.com/XTLS/Xray-core/releases/tag/v26.10.21
+  - https://github.com/XTLS/Xray-core/pull/5645
+  - https://github.com/XTLS/Xray-core/pull/5679
+  - https://github.com/XTLS/Xray-core/pull/6198
+  - https://github.com/XTLS/Xray-core/pull/6226
+  - https://github.com/XTLS/Xray-core/pull/6258
+  - https://github.com/XTLS/Xray-core/pull/6327
+  - https://github.com/XTLS/Xray-core/pull/6718
+  - https://github.com/XTLS/Xray-core/pull/6748
+  - https://github.com/XTLS/Xray-core/pull/6807
+  - https://github.com/XTLS/Xray-core/pull/6844
+  - https://github.com/XTLS/Xray-core/pull/7090
+  - https://github.com/XTLS/Xray-core/pull/7105
+  - https://github.com/XTLS/Xray-core/pull/7182
+  - https://github.com/XTLS/Xray-core/blob/v26.3.27/infra/conf/transport_internet.go
+  - https://sing-box.sagernet.org/deprecated/
+  - https://sing-box.sagernet.org/configuration/inbound/vless/
+  - https://github.com/SagerNet/sing-box/pull/4326
+  - https://github.com/SagerNet/sing-box/releases/tag/v1.15.0-alpha.7
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.9.0
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.10.0
+  - https://github.com/apernet/hysteria/releases/tag/app/v2.13.0
 ---
 
 # Транспорты Xray/sing-box: карта и выбор
@@ -181,7 +203,9 @@ release-notes на newreleases.io.
 
 **Критическое следствие:** Hiddify и Karing (iOS/Android клиенты, построенные на
 sing-box) **не могут подключаться к XHTTP-серверам**. Для XHTTP на клиентах нужны
-**Xray-ядра**: FoxRay/v2RayTun (iOS), v2rayNG (Android), v2rayN (Windows).
+**Xray-ядра**: v2rayNG (Android), v2rayN (Windows); iOS-клиенты FoxRay и v2RayTun под
+вопросом (по App Store API на 2026-10-27 FoXray нет в RU, US, KZ, карточки v2RayTun нет и
+в US, KZ).
 
 ### 3.7 Важная заметка про версии
 
@@ -202,9 +226,35 @@ sing-box) **не могут подключаться к XHTTP-серверам**
   при сохранении конфига; 3X-UI 3.6.0 (30.07.2026) это учитывает и сбрасывает только
   дефектную строку, чтобы один плохой inbound не гасил все. На старых панелях после
   обновления ядра проверять, что inbound'ы поднялись.
-- **Версии на 2026-08-26:** стабильный v26.3.27, пре-релизы до v26.7.28; панель 3X-UI
-  3.6.0 и 3.7.0 тянут v26.7.28. Для XHTTP-плеча между двумя своими Xray выравнивать
-  версии руками (§3.7).
+- **Версии на 2026-10-27:** latest v26.10.21 (21.10.2026, срочный выпуск по корневым
+  сертификатам; v26.10.10 и v26.10.17 отозваны), до него пре-релизы v26.9.9 и v26.9.30;
+  панель 3X-UI 3.11.0 тянет v26.10.21. Ломающие изменения по пути: в v26.9.9 UDP port
+  hopping переехал из `quicParams.udpHop` в отдельную маску `udphop` (PR #6327); формат
+  XDNS finalmask менялся дважды, в v26.9.30 (PR #6718) и в v26.10.21 (PR #7090: `name` в
+  `names`, `type`+`addr` в `addrs`), поэтому клиентам с XDNS из подписки 3X-UI 3.10.0 и
+  новее нужно ядро v26.10.21; с PR #7105 (10.10.2026) TLS-клиент Xray проверяет
+  сертификаты по встроенному набору корней, а не по хранилищу ОС: если частный CA
+  установлен в хранилище ОС, нужна опция `useSystemCA` (в 3X-UI «Use system CA»); CA,
+  указанный в `certificates` самого конфига, по-прежнему добавляется к набору. Поля XHTTP
+  `session*` переименованы в `sessionID*` (PR #6258, 09.06.2026). Для XHTTP-плеча между
+  двумя своими Xray выравнивать версии руками (§3.7).
+
+### 3.9 XDRIVE и MASQUE (осень 2026)
+
+- **XDRIVE** (PR #5645 и #6748, влиты 19.09.2026; есть в v26.9.30 и v26.10.21): поток
+  идёт через файлы в удалённом хранилище. Готовые варианты: Google Drive, локальная папка
+  и HTTP-API хранилища, описанный шаблоном (`template`). Мейнтейнер прямо называет цель:
+  обход IP-белых списков для России и Ирана; собственный публичный IP серверу не нужен.
+  С PR #7182 (17.10.2026) XDRIVE принимает только VLESS с VLESS Encryption без flow, на
+  клиенте обязателен mux; с PR #7181 и #7187 предпочитает h2, умеет h3 и XMUX и по
+  умолчанию шлёт заголовки Chrome. Минусы, по словам автора: ключ доступа к хранилищу
+  лежит на клиенте, IP клиента не виден; вариант для своего использования, не для раздачи.
+- **MASQUE** (IETF CONNECT-IP, RFC 9484): в Xray outbound и транспорт (PR #6807,
+  24.09.2026), inbound (PR #6844, 27.09.2026), HTTP/2 через Extended CONNECT (PR #6810),
+  XMUX с `maxConnections: 1` по умолчанию (PR #7121); в sing-box клиент и сервер только в
+  1.15.0-alpha (с alpha.7).
+- Статус в РФ: ни XDRIVE, ни MASQUE замером из РФ не подтверждены; рекомендовать как
+  рабочие нельзя.
 
 ---
 
@@ -294,7 +344,8 @@ Xray** — параметры `header` и `seed` мигрированы в но�
 **Hysteria2** — это **самостоятельный VPN-протокол поверх QUIC**, а не транспорт
 для VLESS/VMess. Отдельная архитектура. Поддерживается:
 - ✅ **sing-box** — нативный Hysteria2 outbound
-- ✅ **Xray-core с `v26.1.23`** (Hysteria2 outbound добавлен)
+- ✅ **Xray-core с `v26.1.23`** (Hysteria2 outbound добавлен); inbound и транспорт
+  Hysteria 2 с Salamander finalmask с v26.3.27 (PR #5679)
 - ✅ **apernet/hysteria** — оригинальная реализация
 
 ### 8.1 Особенности
@@ -309,9 +360,11 @@ Xray** — параметры `header` и `seed` мигрированы в но�
 ### 8.2 Известные баги Hysteria2
 
 - **apernet/hysteria #1364:** obfs causes crash в v2.6.1
-- **Xray-core #5712** (закрыт not planned 26.02.2026, Salamander в Xray-core не будет): feature request на поддержку `hysteria2 obfs (Salamander)`
-  в Xray-core — означает, что на момент создания issue Xray не поддерживал
-  Salamander нативно
+- **Salamander в Xray-core есть, в виде finalmask.** PR #5679 (влит 12.02.2026, впервые в
+  стабильном v26.3.27) добавил Hysteria 2 inbound и транспорт с Salamander finalmask;
+  PR #6198 (29.05.2026) добавил маске `packetSize`, то есть аналог Gecko из Hysteria
+  v2.9.2. Закрытие запроса #5712 как not planned прежнего вывода «Salamander не будет» не
+  подтверждает.
 - **3X-UI #3901:** feature request на native UI поддержку Hysteria2 — статус
   под обсуждением
 
@@ -327,7 +380,7 @@ risk быть отброшенным как «неопознанный UDP».
 > ⚠️ **Обновление 2026-08-26.** 04.08.2026 РКН режет QUIC целиком: замер Xeovo на
 > нескольких LTE и проводных ISP, hy2 недоступен полностью при живых VLESS/VMess
 > (MEDIUM). Masquerade не спасает, потому что блокируется транспорт, а не сигнатура.
-> apernet/hysteria продолжает релизы (2.12.2 от 23.08.2026), 3X-UI держит Hysteria2
+> apernet/hysteria продолжает релизы (2.13.0 от 05.10.2026), 3X-UI держит Hysteria2
 > inbound нативно (issue #3901 закрыт completed 29.05.2026), но для входа **из РФ**
 > Hysteria2 на 2026-08 не выбор. Расхождение с маркетингом «работает стабильно»:
 > КОНФЛИКТ-006 в `_meta/conflicts.md`.
@@ -426,7 +479,7 @@ Plugin-chain: SS-server → v2ray-plugin → реальный TCP-сокет.
 | gRPC | ✅ | ✅ |
 | QUIC (как transport) | ✅ (несовместим с Xray-QUIC) | ⚠️ |
 | mKCP | ❌ | ✅ (реструктурирован 2026) |
-| **XHTTP** | ❌ | ✅ (v24.9.30+) |
+| **XHTTP** | ❌ (на 2026-10-27: в документации транспортов нет; PR #3879 и #4326 закрыты без влития) | ✅ (v24.9.30+) |
 | **Протоколы (outbound)** | | |
 | VLESS | ✅ | ✅ |
 | VMess | ✅ | ✅ |
@@ -435,28 +488,37 @@ Plugin-chain: SS-server → v2ray-plugin → реальный TCP-сокет.
 | **TUIC** | ✅ | ❌ |
 | **NaiveProxy** | ✅ | ❌ |
 | **AnyTLS** | ✅ (v1.12.0+) | ❌ |
-| WireGuard | ✅ (deprecated) | ✅ |
+| WireGuard | ✅ как endpoint (WireGuard outbound deprecated в 1.11.0, удалён в 1.13.0) | ✅ |
 | Hysteria2 outbound | ✅ | ✅ (v26.1.23+) |
 | **Security/flow** | | |
-| REALITY (server) | ⚠️ КОНФЛИКТ доков | ✅ (v1.8.0+) |
-| `xtls-rprx-vision` | ⚠️ КОНФЛИКТ доков | ✅ (нативно) |
+| REALITY (server) | ✅ (сервер: `handshake`, `private_key`; на клиенте только с движком `go`) | ✅ (v1.8.0+) |
+| `xtls-rprx-vision` | ✅ (значение `flow` в документации inbound и outbound VLESS) | ✅ (нативно) |
 | XUDP (VMess) | ✅ (v1.1+) | ✅ |
 | TUN inbound | ✅ | ✅ (v26.1.23: UDP FullCone NAT) |
 | HTTP-client | ✅ (v1.14.0+, HTTP 1/2/3) | n/a |
+| **MASQUE** (CONNECT-IP) | ⚠️ только 1.15.0-alpha (с alpha.7) | ✅ (outbound и транспорт PR #6807, inbound PR #6844, осень 2026) |
+| **XDRIVE** | ❌ | ✅ (PR #5645 и #6748, влиты 19.09.2026) |
 
-### 12.1 КОНФЛИКТ в sing-box доках по REALITY/Vision
+### 12.1 REALITY и Vision в sing-box: конфликт доков снят (2026-10-27)
 
-В sing-box есть противоречие:
+Прежде здесь числилось противоречие:
 - VLESS-страница: `flow: "xtls-rprx-vision"` указан как валидное значение
-- TLS shared-страница: `reality` помечен как **unsupported/deprecated**
+- TLS shared-страница (сверено 2026-10-27): `reality` описан для клиента и сервера и не
+  помечен deprecated; в список Unsupported fields он входит только для движков `apple` и
+  `windows` (поле `engine`, с 1.14.0)
 - [singbox-internals](https://singbox-internals.hidandelion.com/protocols/vless.html)
   утверждает: sing-box НЕ имплементирует Vision/XTLS
 
-❓ Требует подтверждения от maintainer-ов sing-box. Зафиксировано в `_meta/conflicts.md`.
+✅ Конфликт снят по официальной документации (2026-10-27): REALITY поддержан на движке
+`go`, `xtls-rprx-vision` указан значением `flow` для inbound и outbound VLESS. Утверждение
+singbox-internals об отсутствии Vision официальной документацией не подтверждается.
+Запись в `_meta/conflicts.md` закрыть.
 
-**Практический совет:** для REALITY+Vision-сервера — используйте Xray-клиентов
-(FoxRay, v2rayN, v2rayNG). Для REALITY без Vision — sing-box работает (Hiddify,
-Karing).
+**Практический совет:** по документации sing-box поддерживает REALITY+Vision:
+`flow: xtls-rprx-vision` описан у inbound и outbound VLESS, реализация в
+`SagerNet/sing-vmess/vless/vision.go`. Совместимость Vision между sing-box и Xray живым
+тестом не проверена: пока её нет, для REALITY+Vision-сервера надёжнее Xray-клиенты
+(v2rayN, v2rayNG; FoxRay на iOS под вопросом, см. §3.6).
 
 ---
 
@@ -498,9 +560,14 @@ HIGH: [XTLS/REALITY README](https://github.com/XTLS/REALITY/blob/main/README.en.
 
 - ≥ **`v1.6.3`** — REALITY впервые попал в Xray
 - ≥ **`v1.8.0`** — REALITY стабилен
-- 🟡 **June 1, 2026 UTC** — scheduled disable `allowInsecure: true`. Конфиги с
-  этим полем без миграции перестанут работать в новых релизах. Migration window
-  открыт.
+- 🔴 **`allowInsecure: true` больше не работает.** Таймер на 01.06.2026 стоял уже в
+  стабильных v26.2.6 и v26.3.27 (в v26.1.23 было только предупреждение): после этой даты
+  ядро отказывается загружать конфиг с этим полем и выдаёт ошибку removed feature.
+  PR #6226 (влит 02.06.2026, впервые в пре-релизе v26.6.22, есть и в v26.10.21) убрал
+  таймер, отказ стал безусловным; в том же PR из конфига убраны `verifyPeerCertInNames`
+  (замена `verifyPeerCertByName`) и `echForceQuery`. Замена для `allowInsecure`:
+  `pinnedPeerCertSha256` или `verifyPeerCertByName`. Любой конфиг или подписку с
+  `allowInsecure: true` чинить сразу, не дожидаясь обновления ядра.
 
 ### 13.6 Рекомендуемая комбинация для РФ-2026
 
