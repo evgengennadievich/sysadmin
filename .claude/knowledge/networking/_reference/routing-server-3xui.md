@@ -1,13 +1,21 @@
 ---
 knowledge_domain: vpn
 layer: reference
-last_researched: 2026-07-02
+last_researched: 2026-10-27
 ttl_days: 60
 sources_checked:
   - https://github.com/MHSanaei/3x-ui
   - https://xtls.github.io/en/config/routing.html
   - https://github.com/v2fly/domain-list-community
   - эмпирика 2026-07-02 (Xray 26.6.27): AND-семантика domain+ip в одном правиле
+  - https://xtls.github.io/en/config/observatory.html
+  - https://github.com/XTLS/Xray-core/blob/main/infra/conf/observatory.go
+  - https://github.com/MHSanaei/3x-ui/blob/main/frontend/src/schemas/observatory.ts
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.8.5
+  - https://github.com/MHSanaei/3x-ui/releases/tag/v3.8.0
+  - https://github.com/MHSanaei/3x-ui/blob/main/docs/public/openapi.json
+  - https://github.com/MHSanaei/3x-ui/tree/v2.8.11
+  - https://github.com/MHSanaei/3x-ui/tree/v2.9.4
 ---
 
 # Гибкая маршрутизация НА СЕРВЕРЕ (3X-UI / Xray) — приоритетный сценарий
@@ -24,7 +32,7 @@ sources_checked:
 Связан с:
 - `vpn-consultation-flow.md` (сценарий консультации, interview, TUN, FAQ — hub)
 - `3x-ui-panel.md` (архитектура панели, ядро Xray, балансировщики, observatory)
-- `3x-ui-api.md` (как править routing через REST: getXrayConfig/updateXrayConfig)
+- `3x-ui-api.md` (как править routing через REST: `xray/` и `xray/update`, см. §7)
 - `routing-on-device-singbox.md`, `routing-on-device-xray.md` (альтернатива — split на устройстве, для энтузиастов)
 - `_live/frontline-ru.md` (актуальный фронт блокировок)
 
@@ -134,6 +142,9 @@ sources_checked:
 через подписку провайдера (Xray Settings → Outbounds → Add Subscription), либо
 вручную как VLESS-outbound на свой загр.VPS (шаблон — `3x-ui-api.md` §6.3).
 
+Outbound-подписки использовать на v3.8.5 и новее. Раньше добавление или удаление сервера в
+подписке перепривязывало теги к другим серверам и ломало балансир и правила, выбирающие по тегу.
+
 ### 3.3 Балансировщик (если upstream-ов несколько)
 
 ```json
@@ -153,13 +164,13 @@ sources_checked:
   "observatory": {
     "subjectSelector": ["upstream"],
     "probeUrl": "http://www.google.com/gen_204",
-    "probeInterval": "30s"
+    "probeInterval": "5m"
   }
 }
 ```
 
-> ⚠️ В старых конфигах встречается `pingConfig` — устаревшее имя, в свежем Xray
-> не работает. Использовать `probeUrl` + `probeInterval`.
+> ⚠️ `pingConfig` относится к `burstObservatory`; у `observatory` поля `probeURL`
+> (в документации `probeUrl`) и `probeInterval`. Смешивать блоки нельзя.
 
 ---
 
@@ -337,16 +348,23 @@ geoip-правила (private, geoip:ru — правила 2 и 5) и bittorrent
 
 ```bash
 # 1. Получить текущий конфиг
-api_call GET "/panel/api/inbounds/getXrayConfig"
+api_call POST "/panel/api/xray/"
 
 # 2. Локально изменить outbounds + routing.rules + balancers + observatory
 
-# 3. Отправить обновлённый
-api_call POST "/panel/api/inbounds/updateXrayConfig" --json-body "$NEW_XRAY_JSON"
+# 3. Отправить обновлённый: POST /panel/api/xray/update, тело form xraySetting=<JSON строкой>
+#    (в хелпере это api_update_xray_config, см. 3x-ui-api.md §15.4)
 
 # 4. ОБЯЗАТЕЛЬНО перезапустить Xray
-api_call POST "/panel/api/inbounds/restartXrayService"
+api_call POST "/panel/api/server/restartXrayService"
 ```
+
+3.x: чтение `POST /panel/api/xray/`, запись `POST /panel/api/xray/update` (form
+`xraySetting=<JSON строкой>`), рестарт `POST /panel/api/server/restartXrayService`. Пути
+`inbounds/getXrayConfig`, `inbounds/updateXrayConfig`, `inbounds/restartXrayService` в коде
+v2.8.11 и v2.9.4 не найдены; на 2.x конфиг читался `POST /panel/xray/` и писался
+`POST /panel/xray/update` (по cookie, вне `/panel/api`). Вариант панели хелпер определяет сам
+(`3x-ui-api.md` §15).
 
 > ⚠️ Без `restartXrayService` изменения остаются в SQLite, но не в работающем
 > Xray (грабля `3x-ui-panel.md` §7.8). Перезапуск не рвёт живые TCP — новые
@@ -363,10 +381,11 @@ api_call POST "/panel/api/inbounds/restartXrayService"
 ничего не настраивает.
 
 ```
-https://{DOMAIN}:{PANEL_PORT}/{SUBSCRIPTION_PATH}/{CLIENT_UUID}
+https://{DOMAIN}:{PANEL_PORT}/{SUBSCRIPTION_PATH}/{SUB_ID}
 ```
 
-`SUBSCRIPTION_PATH` — отдельный путь (не webBasePath!), обычно `sub` (см.
+`SUBSCRIPTION_PATH` отдельный путь (не webBasePath!); с v3.8.0 свежая база получает случайные
+пути подписок, путь читать из настроек. Ключ в адресе это subId клиента, а не UUID (см.
 `3x-ui-api.md` §9). Ответ — base64-список `vless://`-ссылок. Импортируется в
 любой клиент (Hiddify/Happ/Karing/v2rayNG/SFA) → клиент подключается к серверу,
 а вся маршрутизация уже на сервере.
@@ -428,7 +447,7 @@ curl -s --interface direct ifconfig.me   # концептуально; на пр
 
 - **Сценарий консультации (hub):** `vpn-consultation-flow.md` (interview, TUN, выбор протокола, FAQ)
 - **Архитектура панели:** `3x-ui-panel.md` (ядро Xray, балансировщики, observatory, грабли)
-- **REST API:** `3x-ui-api.md` (getXrayConfig/updateXrayConfig, subscription endpoint)
+- **REST API:** `3x-ui-api.md` (`xray/` и `xray/update`, subscription endpoint)
 - **Альтернатива (split на устройстве):** `routing-on-device-singbox.md`, `routing-on-device-xray.md`
 - **Клиенты подключения:** `client-apps.md` (какой клиент что принимает)
 - **Фронт блокировок:** `_live/frontline-ru.md`
