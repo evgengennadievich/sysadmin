@@ -10,6 +10,12 @@
             "command": "g=\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/red-zone-guard.sh\"; if [ -f \"$g\" ]; then bash \"$g\"; else cat >/dev/null; fi",
             "timeout": 15,
             "statusMessage": "Проверяю зону операции…"
+          },
+          {
+            "type": "command",
+            "command": "g=\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-git-guard.sh\"; if [ -f \"$g\" ]; then bash \"$g\"; else cat >/dev/null; fi",
+            "timeout": 15,
+            "statusMessage": "Сверяю, чьё уходит в коммит и отправку…"
           }
         ]
       },
@@ -21,6 +27,19 @@
             "command": "g=\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/retro-finding-gate.sh\"; if [ -f \"$g\" ]; then bash \"$g\"; else cat >/dev/null; fi",
             "timeout": 15,
             "statusMessage": "Проверяю основание находки…"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "g=\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-git-guard.sh\"; if [ -f \"$g\" ]; then bash \"$g\"; else cat >/dev/null; fi",
+            "timeout": 15,
+            "statusMessage": "Запоминаю коммиты сессии…"
           }
         ]
       }
