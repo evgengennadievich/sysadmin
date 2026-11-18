@@ -11,6 +11,7 @@
 | Файл | О чём | Кто потребитель |
 |---|---|---|
 | [`_reference/claude-code-transcript.md`](_reference/claude-code-transcript.md) | как отличить голос человека от вставок движка в `.jsonl` | `red-zone-guard.sh`, `inventory-sync-guard.sh`, разбор сессий |
+| [`_reference/codex-transcript.md`](_reference/codex-transcript.md) | то же для Codex: голос человека только `event_msg/user_message`, текст AGENTS.md в записи притворяется репликой | `codex_transcript.py` и все замки под Codex, `$retro` |
 | [`_reference/building-enforcement.md`](_reference/building-enforcement.md) | как строить замок, чтобы он работал: живой тест в обе стороны, тест из источника, конфликт разделителя, почему ложные срабатывания — цена, а не дефект | всякий, кто добавляет хук / линтер / гейт (`/dev`) |
 
 **Читать по одному файлу, а не оба сразу.** Пишешь код, который разбирает реплики

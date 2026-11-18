@@ -16,7 +16,16 @@
 set -u
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
-STAGED="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)"
+STAGED="$(git -C "$ROOT" -c core.quotePath=false diff --cached --name-only --no-renames --diff-filter=ADMT)" || exit 1
+
+# Для проверок, которым нужны файлы и ссылки на соседние файлы, берём слепок
+# индекса. Активный GIT_INDEX_FILE, в том числе при git commit -- <пути>, сохраняется.
+STAGED_ROOT="$(mktemp -d)" || exit 1
+trap 'rm -rf -- "$STAGED_ROOT"' EXIT
+if ! git -C "$ROOT" checkout-index --all --ignore-skip-worktree-bits --prefix="$STAGED_ROOT/"; then
+    echo "pre-commit: не удалось прочитать файлы из индекса." >&2
+    exit 1
+fi
 FAIL=0
 
 # ===========================================================================
@@ -30,26 +39,16 @@ case "$STAGED" in *".claude/agents/references/"*) PERSONA_TOUCHED=1 ;; esac
 if [ "$PERSONA_TOUCHED" -eq 1 ]; then
     # --- бюджет ядра CLAUDE.md (ADR-0016, анти-храповик) -------------------
     CLAUDE_BUDGET_BYTES=46000
-    CLAUDEMD="$ROOT/CLAUDE.md"
-    case "$STAGED" in
-        *"CLAUDE.md"*)
-            if [ -f "$CLAUDEMD" ]; then
-                # Размер берём из ИНДЕКСА, а не из рабочего дерева. На Windows рабочая
-                # копия хранится с CRLF, и `wc -c` насчитывает лишний байт на КАЖДУЮ
-                # строку (~416 Б на этом файле) — бюджет ложно «превышался» на одной
-                # платформе и спокойно проходил на другой. В репозитории всегда LF,
-                # поэтому меряем то, что реально уйдёт в коммит. (PR #9, ostrovskid)
-                BYTES="$(git -C "$ROOT" cat-file -s :CLAUDE.md 2>/dev/null)"
-                [ -n "$BYTES" ] || BYTES="$(wc -c < "$CLAUDEMD" | tr -d ' ')"
-                if [ "$BYTES" -gt "$CLAUDE_BUDGET_BYTES" ]; then
-                    echo "❌ pre-commit: CLAUDE.md = ${BYTES} Б > бюджет ${CLAUDE_BUDGET_BYTES} Б (ADR-0016)." >&2
-                    echo "   Ядро грузится при каждом старте. Вынеси часть в references/ («одно входит — одно выходит»)," >&2
-                    echo "   либо подними бюджет осознанно через ADR. Обход (редко): git commit --no-verify" >&2
-                    FAIL=1
-                fi
-            fi
-            ;;
-    esac
+    if [ -f "$STAGED_ROOT/CLAUDE.md" ]; then
+        BYTES="$(git -C "$ROOT" cat-file -s :CLAUDE.md)" || exit 1
+        if [ "$BYTES" -gt "$CLAUDE_BUDGET_BYTES" ]; then
+            echo "pre-commit: CLAUDE.md занимает ${BYTES} Б в индексе при лимите ${CLAUDE_BUDGET_BYTES} Б." >&2
+            FAIL=1
+        fi
+    elif git -C "$ROOT" cat-file -e HEAD:CLAUDE.md 2>/dev/null; then
+        echo "pre-commit: из индекса удалено ядро CLAUDE.md." >&2
+        FAIL=1
+    fi
 
     # --- линтер согласованности слоёв -------------------------------------
     LINTER="$ROOT/.claude/skills/_lib/check-persona-sync.sh"
@@ -57,12 +56,27 @@ if [ "$PERSONA_TOUCHED" -eq 1 ]; then
         echo "⚠️  pre-commit: персона меняется, но линтер не найден ($LINTER) — пропускаю проверку." >&2
     else
         echo "pre-commit: коммит трогает персону → проверяю согласованность слоёв…" >&2
-        if ! bash "$LINTER" --root "$ROOT" >&2; then
+        if ! bash "$LINTER" --root "$STAGED_ROOT" >&2; then
             echo >&2
             echo "❌ pre-commit: персона рассинхронизирована (выжимка ↔ references)." >&2
             echo "   Синхронизируй ядро CLAUDE.md и references/ (см. CLAUDE.md «персона двухслойна»)." >&2
             FAIL=1
         fi
+    fi
+fi
+
+# ===========================================================================
+# 1а. AGENTS.md (ядро для Codex) = codex/AGENTS.header.md + CLAUDE.md (ADR-0042).
+#     Проверяется на ЛЮБОМ коммите: дёшево, а расхождение ядер двух агентов — та же
+#     ошибка, что рассинхрон слоёв персоны (агент на старте идёт по устаревшей версии).
+# ===========================================================================
+AGBUILD="$ROOT/scripts/build-agents-md.sh"
+if [ -f "$STAGED_ROOT/codex/AGENTS.header.md" ] || [ -f "$STAGED_ROOT/AGENTS.md" ] ||
+   [ -f "$STAGED_ROOT/scripts/build-agents-md.sh" ] ||
+   git -C "$ROOT" cat-file -e HEAD:codex/AGENTS.header.md 2>/dev/null; then
+    if ! bash "$AGBUILD" --check "$STAGED_ROOT" >&2; then
+        echo "pre-commit: AGENTS.md в индексе должен совпадать с адаптером и ядром в индексе." >&2
+        FAIL=1
     fi
 fi
 
@@ -81,7 +95,7 @@ if [ "$KNOWLEDGE_TOUCHED" -eq 1 ]; then
         echo "   Для строгой проверки целостности базы знаний установи python3 (+ pip install pyyaml)." >&2
     else
         echo "pre-commit: коммит трогает knowledge → проверяю целостность базы…" >&2
-        if ! ( cd "$ROOT" && python3 "$VALIDATOR" >&2 ); then
+        if ! ( cd "$STAGED_ROOT" && python3 "$VALIDATOR" >&2 ); then
             echo >&2
             echo "❌ pre-commit: база знаний не прошла валидацию (frontmatter / битые ссылки)." >&2
             echo "   Почини по выводу выше. Обход (редко): git commit --no-verify" >&2
@@ -144,7 +158,7 @@ if [ "$SCHEMA_TOUCHED" -eq 1 ]; then
         echo "⚠️  pre-commit: python3 не найден — пропускаю проверку схемы." >&2
     else
         echo "pre-commit: коммит трогает схему карты инфры → прогоняю тест…" >&2
-        ( cd "$ROOT" && python3 "$SCHEMATEST" >&2 )
+        ( cd "$ROOT" && SYSADMIN_SCHEMA_FILE="$STAGED_ROOT/infra-config.schema.json" python3 "$SCHEMATEST" >&2 )
         SCHEMA_RC=$?
         if [ "$SCHEMA_RC" -eq 2 ]; then
             # Нет модуля jsonschema — проверить нечем. Не блокирую (на чужой машине
@@ -194,13 +208,13 @@ if [ "$SHELLCODE_TOUCHED" -eq 1 ]; then
             [ -n "$f" ] || continue
             case "$f" in
                 .claude/skills/*.md|.claude/agents/*.md|.claude/knowledge/*.md)
-                    [ -f "$ROOT/$f" ] && STAGED_MD+=("$ROOT/$f") ;;
+                    [ -f "$STAGED_ROOT/$f" ] && STAGED_MD+=("$STAGED_ROOT/$f") ;;
             esac
         done <<EOF
 $STAGED
 EOF
         if [ "${#STAGED_MD[@]}" -gt 0 ]; then
-            if ! bash "$PORTLINT" --root "$ROOT" "${STAGED_MD[@]}" >&2; then
+            if ! bash "$PORTLINT" --root "$STAGED_ROOT" "${STAGED_MD[@]}" >&2; then
                 echo >&2
                 echo "❌ pre-commit: в inline-коде есть конструкции, ломающиеся в zsh." >&2
                 echo "   Почини по подсказкам выше. Обход (редко): git commit --no-verify" >&2
@@ -250,7 +264,7 @@ fi
 # Telegram-бота, который базовый набор 8.30.1 не ловит.
 if command -v gitleaks >/dev/null 2>&1; then
     echo "pre-commit: проверяю staged-изменения на секреты…" >&2
-    if ! ( cd "$ROOT" && gitleaks git --staged --no-banner --redact >&2 ); then
+    if ! ( cd "$ROOT" && gitleaks git --config "$STAGED_ROOT/.gitleaks.toml" --staged --no-banner --redact >&2 ); then
         echo >&2
         echo "❌ pre-commit: gitleaks нашёл потенциальный секрет в staged-изменениях." >&2
         echo "   Секреты живут в менеджере паролей, в git — только ссылка на запись (C.5)." >&2

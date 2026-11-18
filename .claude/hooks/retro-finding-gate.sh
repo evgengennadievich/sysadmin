@@ -49,6 +49,26 @@ print(cur if isinstance(cur, str) else json.dumps(cur, ensure_ascii=False))
 }
 
 FILE="$(json_get tool_input.file_path || true)"
+# Codex (ADR-0042): правка файла идёт инструментом apply_patch, путь и текст лежат в одном
+# поле tool_input.command в формате патча («*** Update File: …», строки «+…»). Берём из него
+# добавленные строки бэклога и дальше проверяем их тем же правилом.
+PATCH_TEXT=""
+if [ -z "${FILE:-}" ]; then
+  PATCH="$(json_get tool_input.command || true)"
+  case "${PATCH:-}" in
+    *"*** Begin Patch"*)
+      if command -v python3 >/dev/null 2>&1; then
+        PATCH_TEXT="$(printf '%s' "$PATCH" | python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import codex_transcript as c
+print(c.patch_added_text(sys.stdin.read(), "BACKLOG.md"))
+' "$(cd "$(dirname "$0")" && pwd)" 2>/dev/null)" || PATCH_TEXT=""
+      fi
+      [ -n "$PATCH_TEXT" ] && FILE="BACKLOG.md"
+      ;;
+  esac
+fi
 # Гейт срабатывает на ЛЮБОМ бэклоге находок, а не только на пути локального скилла
 # `/retro`. Причина (разбор 2026-07-24, F5): саморазбор переехал в глобальный навык
 # `/lore-retro`, который пишет в `_retro/`, и правило снова стало просто прозой на новом
@@ -63,7 +83,8 @@ case "${FILE:-}" in
 esac
 
 # Write отдаёт весь файл в content, Edit — добавляемый кусок в new_string.
-TEXT="$(json_get tool_input.new_string || true)"
+TEXT="${PATCH_TEXT:-}"
+[ -z "${TEXT:-}" ] && TEXT="$(json_get tool_input.new_string || true)"
 [ -z "${TEXT:-}" ] && TEXT="$(json_get tool_input.content || true)"
 [ -z "${TEXT:-}" ] && exit 0
 

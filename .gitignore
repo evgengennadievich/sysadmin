@@ -10,6 +10,15 @@ infra-config.json
 !infra-config.example.json
 !infra-config.schema.json
 
+# Реальные значения окружения остаются локально. Шаблоны проверяются как код.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Приватная карта при размещении рядом с кодом в одной рабочей папке.
+/infra/
+
 # Старое имя конфига (до ADR-0013) — у пользователя может остаться legacy-файл,
 # его не коммитим. Публичные шаблоны sysadmin-config.* удалены в 1.12.0 (заменены
 # agent-config.* + infra-config.*), поэтому negation-правил для них больше нет.
@@ -42,6 +51,15 @@ sysadmin-config.json
 # (если понадобятся). Вход «открыл папку → ты сисадмин» обеспечивает CLAUDE.md, а НЕ
 # settings.json `agent` (см. ADR-0015), поэтому settings.json не обязателен.
 .claude/settings.local.json
+
+# Личные разрешения Codex (ADR-0042): аналог settings.local.json — у каждого оператора свои.
+# Общие настройки Codex (.codex/config.toml, .codex/hooks.json) коммитятся.
+.codex/rules/local.rules
+/.codex/auth.json
+/.codex/history.jsonl
+/.codex/sessions/
+# Журналы Codex, если оператор включит их в проекте (codex -c log_dir=./.codex-log).
+.codex-log/
 
 # Метка последней проверки обновлений (у каждого оператора своя)
 .update-check

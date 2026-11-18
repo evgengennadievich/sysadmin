@@ -25,9 +25,16 @@ mk() { # $1 = файл, далее пары "Bash:команда" / "Edit:пут
       python3 - "$tool" "$arg" <<'PY'
 import json, sys
 tool, arg = sys.argv[1], sys.argv[2]
+failed = tool == "EditFail"
+if failed:
+    tool = "Edit"
+tool_id = f"tool-{tool}-{arg}"
 inp = {"command": arg} if tool == "Bash" else {"file_path": arg, "new_string": "x"}
 print(json.dumps({"type":"assistant","message":{"role":"assistant","content":[
-  {"type":"tool_use","name":tool,"input":inp}]}}, ensure_ascii=False))
+  {"type":"tool_use","id":tool_id,"name":tool,"input":inp}]}}, ensure_ascii=False))
+if tool == "Edit":
+    print(json.dumps({"type":"user","message":{"role":"user","content":[
+        {"type":"tool_result","tool_use_id":tool_id,"is_error":failed}]}}))
 PY
     done
   } > "$out"
@@ -120,9 +127,14 @@ echo "[3] Изменение + обновление inventory — пропуск
 mk "$TMP/ok1.jsonl" "Bash:ssh prod-host 'docker compose up -d'" "Edit:/infra/inventory/hosts/prod-host/services.md"
 check pass "правка inventory в том же ходе" "$TMP/ok1.jsonl"
 mk "$TMP/ok2.jsonl" "Bash:ssh prod-host 'systemctl restart nginx'" "Bash:ssh prod-host '/opt/infra-dashboard/bin/refresh.sh'"
-check pass "пересборка снимка/дашборда" "$TMP/ok2.jsonl"
+check block "пересборка дашборда не подтверждает правку текста" "$TMP/ok2.jsonl"
 mk "$TMP/ok3.jsonl" "Bash:ssh prod-host 'docker compose up -d'" "Bash:bash scripts/dump-snapshot.sh prod-host"
-check pass "пересъёмка снимка" "$TMP/ok3.jsonl"
+check block "вызов съёма не подтверждает правку текста" "$TMP/ok3.jsonl"
+
+mk "$TMP/failed-edit.jsonl" "Bash:docker compose up -d" "EditFail:/infra/inventory/hosts/prod/services.md"
+check block "ошибка правки не засчитывается" "$TMP/failed-edit.jsonl"
+mk "$TMP/read-inventory.jsonl" "Bash:docker compose up -d" "Bash:cat /infra/inventory/hosts/prod/services.md"
+check block "чтение карточки не засчитывается" "$TMP/read-inventory.jsonl"
 
 echo "[4] Защита от зацикливания"
 mk "$TMP/loop.jsonl" "Bash:ssh prod-host 'docker compose restart api'"
@@ -153,7 +165,7 @@ check pass  "read-only при cp1252 не трогаем"      "$TMP/ro.jsonl"
 # и повторный прогон того же случая хук законно пропустил бы.
 mk "$TMP/enc2.jsonl" "Bash:ssh prod-host 'docker compose up -d academii'"
 ENC_OUT="$(run "$TMP/enc2.jsonl" 2>/dev/null)"
-if printf '%s' "$ENC_OUT" | grep -q 'инфраструктура изменилась'; then
+if printf '%s' "$ENC_OUT" | grep -q 'нет успешной правки inventory'; then
   PASS=$((PASS+1)); echo "  ✅ русский текст причины не искажён"
 else
   FAIL=$((FAIL+1)); echo "  ❌ причина при cp1252 пуста или искажена"

@@ -70,7 +70,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 ROOT = Path(__file__).resolve().parent.parent
-SCHEMA_PATH = ROOT / "infra-config.schema.json"
+SCHEMA_PATH = Path(os.environ.get("SYSADMIN_SCHEMA_FILE") or ROOT / "infra-config.schema.json")
 
 # Минимальный валидный конфиг — основа для мутаций.
 BASE = {

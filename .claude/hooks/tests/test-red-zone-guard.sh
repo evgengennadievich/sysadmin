@@ -18,7 +18,7 @@ CONFIRMED="$TMP/confirmed.jsonl"
 cat > "$CONFIRMED" <<'EOF'
 {"type":"user","message":{"role":"user","content":"снеси старый том"}}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"нужна фраза: беру риск на себя, бэкап проверен"}]}}
-{"type":"user","message":{"role":"user","content":"подтверждаю удаление тома pgdata-old, беру риск на себя, бэкап проверен"}}
+{"type":"user","uuid":"ok","sessionId":"test-session","message":{"role":"user","content":"подтверждаю docker volume rm pgdata-old, беру риск на себя, бэкап проверен\nкаталог /tmp/project"}}
 EOF
 
 ASSISTANT_ONLY="$TMP/assistant.jsonl"
@@ -54,7 +54,7 @@ STALE="$TMP/stale.jsonl"
 RED_SAMPLE='docker volume rm pgdata-old'
 
 run() { # $1 = команда, $2 = transcript_path (может быть пустым)
-  python3 - "$1" "${2:-}" <<'PY' | env PYTHONIOENCODING="${HOOK_ENC:-utf-8}" bash "$HOOK"
+  python3 - "$1" "${2:-}" <<'PY' | env HOME="$TMP/home" PYTHONIOENCODING="${HOOK_ENC:-utf-8}" bash "$HOOK"
 import json, sys
 print(json.dumps({
   "session_id": "test-session",
@@ -170,8 +170,11 @@ check deny "SQL truncate only"              'psql -c "TRUNCATE ONLY orders"'
 check deny "rm -rf /tmp + боевой путь"      'rm -rf /tmp/x /opt/prod'
 
 echo "[3] Подтверждение оператора открывает замок"
+check deny "другой том" 'docker volume rm pgdata' "$CONFIRMED"
+check deny "другая операция" 'docker volume prune' "$CONFIRMED"
 check allow "фраза в реплике оператора"     'docker volume rm pgdata-old' "$CONFIRMED"
 
+check deny "повтор уже выполненного" "$RED_SAMPLE" "$CONFIRMED"
 echo "[4] Подделать подтверждение нельзя"
 check deny "фраза только у ассистента"      'docker volume rm pgdata' "$ASSISTANT_ONLY"
 check deny "фраза в выводе команды"         'docker volume rm pgdata' "$TOOL_RESULT"
@@ -186,19 +189,19 @@ echo "[6] Фраза из канона C.3 (CLAUDE.md) реально откры
 # в regex было «б[еёЕЁ]кап», а канон пишет «бэкап» через «э» — замок не открывался никогда
 # (разбор 2026-07-24, F3). Тест берёт фразу ИЗ ИСТОЧНИКА, а не из головы.
 CANON_FILE="$(cd "$(dirname "$0")/../../.." && pwd)/CLAUDE.md"
-CANON="$(grep -m1 '^подтверждаю .*беру риск на себя' "$CANON_FILE" 2>/dev/null)"
+CANON="$(grep -A1 -m1 '^подтверждаю .*беру риск на себя' "$CANON_FILE" 2>/dev/null)"
 if [ -z "$CANON" ]; then
   FAIL=$((FAIL+1)); echo "  ❌ не нашёл фразу C.3 в CLAUDE.md — контракт негде взять"
 else
   echo "  ℹ️  канон: ${CANON}"
   # Подставляем канонную фразу как реплику оператора, заменив плейсхолдер на имя сущности.
-  REAL="$(printf '%s' "$CANON" | sed 's/<[^>]*>/удаление тома pgdata-old/')"
+  REAL="$(printf '%s' "$CANON" | sed -e 's/<точная команда>/docker volume rm pgdata-old/' -e 's|<абсолютный путь>|/tmp/project|')"
   CANON_TR="$TMP/canon.jsonl"
   python3 - "$CANON_TR" "$REAL" <<'PY'
 import json, sys
 with open(sys.argv[1], "w", encoding="utf-8") as f:
     f.write(json.dumps({"type":"user","message":{"role":"user","content":"снеси том"}}, ensure_ascii=False)+"\n")
-    f.write(json.dumps({"type":"user","message":{"role":"user","content":sys.argv[2]}}, ensure_ascii=False)+"\n")
+    f.write(json.dumps({"type":"user","uuid":"canon","sessionId":"test-session","message":{"role":"user","content":sys.argv[2]}}, ensure_ascii=False)+"\n")
 PY
   check allow "канонная фраза открывает замок" 'docker volume rm pgdata-old' "$CANON_TR"
 fi

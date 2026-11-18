@@ -35,8 +35,12 @@ RAW="$(cat)"
 
 command -v python3 >/dev/null 2>&1 || exit 0   # fail-open
 
+# Каталог хука — для разбора записи Codex (codex_transcript.py рядом, ADR-0042).
+SYSADMIN_HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+export SYSADMIN_HOOK_DIR
+
 python3 - "$RAW" <<'PY'
-import sys, json, os, re, hashlib, tempfile
+import sys, json, os, re, hashlib, tempfile, posixpath
 
 try:
     d = json.loads(sys.argv[1])
@@ -52,8 +56,19 @@ if not transcript or not os.path.isfile(transcript):
     cwd = d.get("cwd") or os.getcwd()
     slug = re.sub(r"[^a-zA-Z0-9]", "-", cwd)
     transcript = os.path.expanduser(f"~/.claude/projects/{slug}/{session}.jsonl")
+# Codex (ADR-0042): своя раскладка записей и свой формат, разбор в codex_transcript.py.
+HOOK_DIR = os.environ.get("SYSADMIN_HOOK_DIR") or ""
+if HOOK_DIR:
+    sys.path.insert(0, HOOK_DIR)
+try:
+    import codex_transcript as cx
+except Exception:
+    cx = None
+if cx and not os.path.isfile(transcript):
+    transcript = cx.find_transcript(d.get("session_id") or "") or transcript
 if not os.path.isfile(transcript):
     sys.exit(0)
+IS_CODEX = bool(cx and cx.is_codex(transcript))
 
 # ── Разбираем транскрипт: нас интересует только ТЕКУЩИЙ ход ───────────────────
 # Ход = всё, что случилось после последней настоящей реплики оператора. Вставки движка
@@ -89,13 +104,9 @@ def is_real_user(rec):
                                       "<system-reminder>", "Base directory for this skill"))
 
 start = 0
-last_user_text = ""
 for i, rec in enumerate(records):
     if is_real_user(rec):
         start = i + 1
-        m = rec.get("message") or {}
-        c = m.get("content")
-        last_user_text = c if isinstance(c, str) else json.dumps(c, ensure_ascii=False)
 turn = records[start:]
 
 # ── Что в этом ходе делали ────────────────────────────────────────────────────
@@ -124,7 +135,10 @@ CHANGE_RE = re.compile(
     r"|update\.sh",
     re.IGNORECASE)
 
-INVENTORY_RE = re.compile(r"inventory[/\\]|/infra/.*\.md$|refresh\.sh|dump-snapshot", re.IGNORECASE)
+def inventory_card(path):
+    parts = posixpath.normpath(str(path).replace("\\", "/")).split("/")
+    return "inventory" in parts[:-1] and parts[-1].endswith(".md")
+
 
 # Сегменты, начинающиеся с read-only утилиты, изменением не считаются: их аргументы —
 # данные, а не команды. Без этого `grep -n "crontab" file` числился правкой инфраструктуры
@@ -169,30 +183,54 @@ def changes_infra(cmd):
     return None
 
 changed, updated = [], False
-for rec in turn:
-    if rec.get("type") != "assistant":
-        continue
-    for block in (rec.get("message") or {}).get("content") or []:
-        if not isinstance(block, dict) or block.get("type") != "tool_use":
+
+def note_command(cmd):
+    global updated
+    hit = changes_infra(cmd)
+    if hit:
+        changed.append(hit.splitlines()[0][:90])
+        updated = False
+
+if IS_CODEX:
+    turn, _ = cx.current_turn(records)
+    start = len(records) - len(turn)
+    for rec in turn:
+        for cmd in cx.commands([rec]):
+            if not cmd.lstrip().startswith("*** Begin Patch"):
+                note_command(cmd)
+        if any(inventory_card(path) for path in cx.edited_paths([rec])):
+            updated = True
+else:
+    pending_edits = set()
+    for rec in turn:
+        blocks = (rec.get("message") or {}).get("content") or []
+        if not isinstance(blocks, list):
             continue
-        name = block.get("name") or ""
-        inp = block.get("input") or {}
-        if name == "Bash":
-            cmd = str(inp.get("command", ""))
-            hit = changes_infra(cmd)
-            if hit:
-                changed.append(hit.splitlines()[0][:90])
-            if INVENTORY_RE.search(cmd):       # обновление снимка/дашборда скриптом — тоже засчитываем
-                updated = True
-        elif name in ("Write", "Edit", "NotebookEdit"):
-            if INVENTORY_RE.search(str(inp.get("file_path", ""))):
-                updated = True
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            if rec.get("type") == "assistant" and block.get("type") == "tool_use":
+                name = block.get("name")
+                inp = block.get("input") or {}
+                if name == "Bash":
+                    note_command(str(inp.get("command", "")))
+                elif (name in ("Write", "Edit", "NotebookEdit") and block.get("id")
+                      and inventory_card(inp.get("file_path", ""))):
+                    pending_edits.add(block["id"])
+            elif rec.get("type") == "user" and block.get("type") == "tool_result":
+                tool_id = block.get("tool_use_id")
+                if tool_id in pending_edits:
+                    pending_edits.remove(tool_id)
+                    if not block.get("is_error"):
+                        updated = True
 
 if not changed or updated:
     sys.exit(0)
 
 # ── Предохранитель 2: один блок на ход, даже без stop_hook_active ─────────────
-key = hashlib.sha256((str(d.get("session_id", "")) + last_user_text[:400]).encode()).hexdigest()[:16]
+user_record = records[start - 1] if start else {}
+turn_key = d.get("turn_id") or user_record.get("uuid") or user_record.get("timestamp") or start
+key = hashlib.sha256(json.dumps([d.get("session_id"), turn_key]).encode()).hexdigest()[:16]
 tmpdir = tempfile.gettempdir()
 mark = os.path.join(tmpdir, f"sysadmin-inv-guard-{key}")
 
@@ -211,26 +249,22 @@ except Exception:
 if os.path.exists(mark):
     sys.exit(0)
 try:
-    open(mark, "w").close()
+    open(mark, "x").close()
 except Exception:
     sys.exit(0)                      # не смогли поставить метку — лучше пропустить, чем зациклить
 
 sample = "\n".join(f"  • {c}" for c in changed[:3])
-reason = f"""§3.2 — инфраструктура изменилась, inventory не обновлён.
+reason = f"""§3.2. После команд, которые могли изменить инфраструктуру, в журнале нет успешной правки inventory.
 
-В этом ответе были команды, меняющие инфраструктуру:
+Проверь результат этих вызовов:
 {sample}
 
-А правок в inventory/ и обновления снимка не было. Правило §3.2: изменение на сервере и
-запись в текстовом inventory происходят в ОДНОМ ответе — иначе карта тихо расходится с
-реальностью, и следующая сессия примет решение по устаревшему (уровень C.2).
+Сверь состояние с источником. Если изменились данные карты, обнови нужную карточку
+inventory и освежи дашборд, когда он развёрнут. В отчёте укажи, что проверил и чем
+подтвердил результат. Если правка карты не нужна, объясни это по результату сверки.
+Если источник недоступен, укажи, что осталось непроверенным.
 
-Сделай одно из двух:
-  1) обнови соответствующий документ inventory (и освежи дашборд-зеркало, если развёрнут);
-  2) если обновлять нечего — состав, конфиги и связи не менялись — скажи это оператору
-     одной строкой прямо в отчёте.
-
-Останавливаю только один раз за ответ: закончишь снова — пропущу."""
+Напоминание срабатывает один раз за ход."""
 
 print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
 PY

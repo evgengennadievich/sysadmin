@@ -57,19 +57,66 @@ def project_dir() -> str:
     return os.path.join(os.path.expanduser('~/.claude/projects'), slug)
 
 
+def _codex():
+    """Разбор записи Codex (ADR-0042): модуль рядом с замками, .claude/hooks/."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    hooks = os.path.normpath(os.path.join(here, '..', '..', '..', 'hooks'))
+    if hooks not in sys.path:
+        sys.path.insert(0, hooks)
+    try:
+        import codex_transcript
+        return codex_transcript
+    except Exception:
+        return None
+
+
 def resolve_transcript(arg: str | None) -> str:
+    """Запись Claude Code или Codex. Без аргумента берётся свежайшая из обеих."""
     pdir = project_dir()
+    cx = _codex()
     if arg:
         if os.path.isfile(arg):
             return arg
         cand = os.path.join(pdir, arg if arg.endswith('.jsonl') else arg + '.jsonl')
         if os.path.isfile(cand):
             return cand
+        found = cx.find_transcript(arg) if cx else ''
+        if found:
+            return found
         sys.exit(f"ОШИБКА: транскрипт не найден: {arg}")
     files = glob.glob(os.path.join(pdir, '*.jsonl'))
+    if cx:
+        latest = cx.latest_for_cwd(os.getcwd())
+        if latest:
+            files.append(latest)
     if not files:
-        sys.exit(f"ОШИБКА: нет транскриптов в {pdir}. Запущен ли /retro из каталога проекта?")
+        sys.exit(f"ОШИБКА: нет транскриптов ни в {pdir}, ни в ~/.codex/sessions для этого "
+                 f"каталога. Запущен ли разбор из каталога проекта?")
     return max(files, key=os.path.getmtime)
+
+
+def codex_rows(recs, cx):
+    """Строки дайджеста из записи Codex: оператор, агент, вызовы, результаты."""
+    rows, n_op, n_ag, n_tool, ts = [], 0, 0, 0, []
+    for r in recs:
+        p = r.get('payload') or {}
+        t, pt = r.get('type'), p.get('type')
+        if r.get('timestamp'):
+            ts.append(r['timestamp'])
+        if t == 'event_msg' and pt == 'user_message':
+            rows.append(('ОПЕРАТОР', clip(cx.clean_text(p.get('message', '')), TEXT_CAP))); n_op += 1
+        elif t == 'response_item' and pt == 'message' and p.get('role') == 'assistant':
+            txt = ' '.join(c.get('text', '') for c in p.get('content') or [] if isinstance(c, dict))
+            if txt.strip():
+                rows.append(('АГЕНТ', clip(txt, TEXT_CAP))); n_ag += 1
+        elif t == 'response_item' and pt in ('custom_tool_call', 'function_call', 'local_shell_call'):
+            body = p.get('input') or p.get('arguments') or json.dumps(p.get('action') or {}, ensure_ascii=False)
+            rows.append(('АГЕНТ→ИНСТРУМЕНТ', f"[ВЫЗОВ ИНСТРУМЕНТА {p.get('name', pt)}] {clip(str(body), RESULT_CAP)}"))
+        elif t == 'response_item' and pt in ('custom_tool_call_output', 'function_call_output'):
+            out = p.get('output')
+            out = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+            rows.append(('РЕЗУЛЬТАТ', f"[РЕЗУЛЬТАТ] {clip(out, RESULT_CAP)}")); n_tool += 1
+    return rows, n_op, n_ag, n_tool, (ts[0] if ts else None), (ts[-1] if ts else None)
 
 
 def clip(s: str, cap: int) -> str:
@@ -97,7 +144,12 @@ def main() -> None:
     path = resolve_transcript(arg)
 
     rows, n_op, n_ag, n_tool, ts_first, ts_last = [], 0, 0, 0, None, None
-    with open(path, encoding='utf-8') as fh:
+    cx = _codex()
+    if cx and cx.is_codex(path):
+        # Codex: голос оператора только event_msg/user_message; вставки движка (AGENTS.md,
+        # контекст IDE) в дайджест не идут вовсе (codex-transcript.md, C.11).
+        rows, n_op, n_ag, n_tool, ts_first, ts_last = codex_rows(cx.load(path) or [], cx)
+    with open(path if not rows else os.devnull, encoding='utf-8') as fh:
         for line in fh:
             try:
                 o = json.loads(line)

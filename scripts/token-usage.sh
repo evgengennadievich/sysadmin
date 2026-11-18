@@ -2,6 +2,7 @@
 # Замер расхода контекста по транскриптам Claude Code (ADR-0040).
 #   bash scripts/token-usage.sh              — сводка по всем проектам
 #   bash scripts/token-usage.sh detail СЛАГ  — инструменты, повторы и чтения одного проекта
+#   bash scripts/token-usage.sh codex        — только сессии Codex (ADR-0042)
 # Источник: ~/.claude/projects/*/*.jsonl, поле usage; дедупликация по message.id.
 # Шкала стоимости: вход x1, запись кеша x1.25, чтение кеша x0.1, выход x5.
 set -uo pipefail
@@ -63,4 +64,46 @@ detail() {
     }' "$TMP"
 }
 
-if [ "${1:-}" = "detail" ]; then detail "${2:?укажи слаг проекта из ~/.claude/projects}"; else summary; fi
+# Codex (ADR-0042): записи ~/.codex/sessions/ГГГГ/ММ/ДД/rollout-*.jsonl. Расход берётся из
+# последнего event_msg/token_count каждой записи (там накопленный итог сессии), проект —
+# из session_meta.cwd. Шкала Codex своя: вход без кеша x1, чтение кеша x0.1, выход x5 —
+# те же условные единицы, но тарифы и лимиты у Codex другие, сравнивать с Claude напрямую
+# нельзя (правило «срок годности» в ~/.codex/AGENTS.md).
+codex_summary() {
+  local C="${CODEX_HOME:-$HOME/.codex}/sessions"
+  [ -d "$C" ] || { echo "нет записей Codex в $C"; return 0; }
+  printf "%-5s %-8s %-8s %-8s %-7s %s\n" "сесс" "out_k" "вход_k" "кеш_M" "усл.ед" "проект (Codex)"
+  command -v python3 >/dev/null || { echo "для замера Codex нужен python3"; return 0; }
+  python3 - "$C" <<'PY' | sort -k5 -rn
+import glob, json, os, sys
+agg = {}
+for f in glob.glob(os.path.join(sys.argv[1], "*", "*", "*", "rollout-*.jsonl")):
+    cwd, last = None, None
+    with open(f, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            p = d.get("payload") or {}
+            if d.get("type") == "session_meta" and cwd is None:
+                cwd = p.get("cwd") or "?"
+            elif d.get("type") == "event_msg" and p.get("type") == "token_count" and p.get("info"):
+                last = p["info"].get("total_token_usage") or last
+    if not last:
+        continue
+    a = agg.setdefault(cwd or "?", [0, 0, 0, 0])
+    a[0] += 1
+    a[1] += last.get("output_tokens", 0)
+    a[2] += last.get("input_tokens", 0) - last.get("cached_input_tokens", 0)
+    a[3] += last.get("cached_input_tokens", 0)
+for k, (n, o, i, c) in agg.items():
+    print("%-5d %-8.0f %-8.0f %-8.2f %-7.1f %s" % (n, o / 1e3, i / 1e3, c / 1e6, (i + c * 0.1 + o * 5) / 1e6, k))
+PY
+}
+
+case "${1:-}" in
+  detail) detail "${2:?укажи слаг проекта из ~/.claude/projects}" ;;
+  codex)  codex_summary ;;
+  *)      summary; echo; codex_summary ;;
+esac

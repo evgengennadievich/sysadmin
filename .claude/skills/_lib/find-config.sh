@@ -136,18 +136,33 @@ _is_sysadmin_root() {
 locate_sysadmin_root() {
     SYSADMIN_ROOT=""
 
-    # 1. Через bridge-файл (надёжный источник истины)
-    local bridge="$HOME/.claude/agents/sysadmin.md"
-    if [ -f "$bridge" ]; then
+    # Если уже запущены из корня, открытая копия имеет приоритет над указателями.
+    if _is_sysadmin_root "."; then
+        SYSADMIN_ROOT="$(pwd)"
+        return 0
+    fi
+
+    # Каждый указатель проверяем до перехода к типовым каталогам.
+    local claude_bridge="$HOME/.claude/agents/sysadmin.md"
+    local codex_bridge="${CODEX_HOME:-$HOME/.codex}/agents/sysadmin.toml"
+    local bridges=("$claude_bridge" "$codex_bridge")
+    if [ -n "${CODEX_THREAD_ID:-}" ]; then
+        bridges=("$codex_bridge" "$claude_bridge")
+    fi
+    local bridge from_bridge
+    for bridge in "${bridges[@]}"; do
+        [ -f "$bridge" ] || continue
         # Ищем абсолютный путь к sysadmin/ в обратных кавычках. Кросс-платформенно:
         #   - Unix/MINGW:   `/home/.../sysadmin`  или  `/c/Users/.../sysadmin`
         #   - Windows-native: `C:\Users\...\sysadmin`  или  `C:/Users/.../sysadmin`
         # Поэтому НЕ требуем ведущий '/'. Берём всё между обратными кавычками, что
         # заканчивается на sysadmin (с возможным завершающим слешем любого типа).
-        local from_bridge
-        from_bridge=$(grep -oE '`[^`]+sysadmin[/\\]?`' "$bridge" 2>/dev/null \
-            | head -1 \
-            | sed 's|^`||; s|`$||; s|[/\\]$||')
+        from_bridge="$(sed -n 's/^# sysadmin-root: //p' "$bridge" | head -1)"
+        if [ -z "$from_bridge" ]; then
+            from_bridge=$(grep -oE '`[^`]+sysadmin[/\\]?`' "$bridge" 2>/dev/null \
+                | head -1 \
+                | sed 's|^`||; s|`$||; s|[/\\]$||')
+        fi
         # Windows-native путь (C:\...) внутри Git Bash нужно привести к /c/... —
         # bash не умеет с C:\ напрямую. cygpath есть в Git Bash; если нет — оставляем.
         if [ -n "$from_bridge" ] && command -v cygpath >/dev/null 2>&1; then
@@ -155,11 +170,11 @@ locate_sysadmin_root() {
                 [A-Za-z]:*) from_bridge="$(cygpath -u "$from_bridge" 2>/dev/null || echo "$from_bridge")" ;;
             esac
         fi
-        if [ -n "$from_bridge" ] && [ -d "$from_bridge" ]; then
-            SYSADMIN_ROOT="$from_bridge"
+        if [ -n "$from_bridge" ] && _is_sysadmin_root "$from_bridge"; then
+            SYSADMIN_ROOT="$(cd "$from_bridge" && pwd)"
             return 0
         fi
-    fi
+    done
 
     # 2. Типичные локации
     local candidate
@@ -174,12 +189,6 @@ locate_sysadmin_root() {
             return 0
         fi
     done
-
-    # 3. Эвристика — может, мы внутри самого sysadmin/?
-    if _is_sysadmin_root "."; then
-        SYSADMIN_ROOT="$(pwd)"
-        return 0
-    fi
 
     return 1
 }

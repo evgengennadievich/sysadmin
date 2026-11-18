@@ -4,8 +4,8 @@
 # Две «сессии» (А и Б) работают в ОДНОЙ рабочей копии, как сессии агента в папке infra.
 # Воспроизводятся три ожога: push уносит чужие коммиты (09.11.2026), коммит забирает чужой
 # индекс (27.10.2026), коммит забирает чужие строки общего файла (03.09.2026). Хук получает
-# тот же stdin, что даёт Claude Code; каждая команда сессии проходит Pre, исполняется и
-# проходит Post, а в транскрипт сессии пишется её вызов инструмента, как это делает движок.
+# тот же stdin, что даёт Claude Code; каждая команда проходит PreToolUse и выполняется
+# с полученным updatedInput, а её вызов пишется в транскрипт, как это делает движок.
 # Фраза и пометка берутся из канона (references/trust-zones.md), а не из кода замка.
 
 set -uo pipefail
@@ -21,7 +21,6 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 BASE="${TMP}/папка с пробелом"
 mkdir -p "$BASE"
-export SESSION_GIT_STATE_DIR="${TMP}/state"
 PASS=0; FAIL=0
 
 ok()   { PASS=$((PASS+1)); echo "  ✅ $1"; }
@@ -33,13 +32,17 @@ ACK="$(python3 -c 'import re,sys; t=open(sys.argv[1],encoding="utf-8").read(); m
 echo "[0] каноны из references/trust-zones.md"
 [ -n "$PHRASE" ] && ok "фраза найдена: «${PHRASE}»" || bad "фраза в каноне не найдена (потерян источник)"
 [ -n "$ACK" ] && ok "пометка найдена: ${ACK}" || bad "пометка в каноне не найдена (потерян источник)"
-grep -qF "PUSH_PHRASE = \"${PHRASE}\"" "$PYCORE" && ok "фраза в замке совпадает с каноном" || bad "фраза в замке расходится с каноном"
+grep -qF "PUSH_PHRASE = \"${PHRASE}\"" "$(dirname "$PYCORE")/approval_format.py" && ok "фраза в замке совпадает с каноном" || bad "фраза в замке расходится с каноном"
 grep -qF "ACK_MARK = \"${ACK}\"" "$PYCORE" && ok "пометка в замке совпадает с каноном" || bad "пометка в замке расходится с каноном"
 
 # ── обвязка ───────────────────────────────────────────────────────────────────
 hook() { # $1 событие $2 сессия $3 транскрипт $4 cwd $5 команда
-  python3 -c 'import json,sys; print(json.dumps({"hook_event_name":sys.argv[1],"session_id":sys.argv[2],"transcript_path":sys.argv[3],"cwd":sys.argv[4],"tool_name":"Bash","tool_input":{"command":sys.argv[5]}}, ensure_ascii=False))' \
-    "$1" "$2" "$3" "$4" "$5" | env PYTHONIOENCODING="${HOOK_ENC:-utf-8}" bash "$HOOK"
+  python3 -c '
+import json,sys
+d = {"hook_event_name":sys.argv[1],"session_id":sys.argv[2],"transcript_path":sys.argv[3],"cwd":sys.argv[4],"tool_name":"Bash","tool_input":{"command":sys.argv[5]}}
+if sys.argv[6]: d["turn_id"] = "test-turn"
+print(json.dumps(d, ensure_ascii=False))' \
+    "$1" "$2" "$3" "$4" "$5" "${HOOK_CODEX:-}" | env PYTHONIOENCODING="${HOOK_ENC:-utf-8}" bash "$HOOK"
 }
 log_tool() { # $1 транскрипт $2 команда: вызов инструмента сессии, как пишет движок
   python3 -c 'import json,sys; print(json.dumps({"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":sys.argv[2]}}]}}, ensure_ascii=False))' "$1" "$2" >> "$1"
@@ -54,6 +57,9 @@ tool_result_user() { # вывод инструмента с фразой вну�
   python3 -c 'import json,sys; print(json.dumps({"type":"user","sourceToolUseID":"toolu_x","message":{"role":"user","content":sys.argv[2]}}, ensure_ascii=False))' "$1" "$2" >> "$1"
 }
 # run_as: сессия выполняет команду через замок. Печатает вердикт хука; при отказе не исполняет.
+rewritten() {
+  python3 -c 'import json,sys; raw=sys.argv[1]; d=json.loads(raw) if raw else {}; print(d.get("hookSpecificOutput",{}).get("updatedInput",{}).get("command",sys.argv[2]))' "$1" "$2"
+}
 run_as() { # $1 сессия $2 команда
   local sid="$1" cmd="$2" tr out
   tr="${TMP}/${sid}.jsonl"
@@ -62,8 +68,8 @@ run_as() { # $1 сессия $2 команда
   if printf '%s' "$out" | grep -q '"permissionDecision": *"deny"'; then
     printf '%s' "$out"; return 0
   fi
+  cmd="$(rewritten "$out" "$cmd")" || return 1
   (cd "$WORK" && bash -c "$cmd") >/dev/null 2>&1
-  hook PostToolUse "$sid" "$tr" "$WORK" "$cmd" >/dev/null
   printf '%s' "$out"
 }
 is_deny()  { printf '%s' "$1" | grep -q '"permissionDecision": *"deny"'; }
@@ -88,7 +94,7 @@ say_user "$TA" "запиши статус"; say_user "$TB" "запиши ста�
 echo "[1] push уносит чужие коммиты (09.11.2026)"
 o="$(run_as A 'printf "Запись сессии А о выкатке зимнего времени\n" > a.txt && git add -- a.txt && git commit -qm "А: своя запись"')"
 expect_allow "А коммитит свой файл" "$o"
-o="$(run_as B 'printf "Запись сессии Б о выкатке Металлиста\n" > b.txt && git add -- b.txt && git commit -qm "Б: своя запись"')"
+o="$(run_as B 'printf "Запись сессии Б о выкатке Проект Са\n" > b.txt && git add -- b.txt && git commit -qm "Б: своя запись"')"
 expect_allow "Б коммитит свой файл" "$o"
 o="$(run_as A 'git push -q origin main')"
 expect_deny "А: push с коммитом Б блокируется" "$o" "Б: своя запись"
@@ -100,6 +106,15 @@ expect_deny "фраза в реплике агента замок не откр�
 tool_result_user "$TA" "${PHRASE}"
 o="$(hook PreToolUse A "$TA" "$WORK" 'git push -q origin main')"
 expect_deny "фраза в выводе инструмента замок не открывает (C.11)" "$o"
+say_user "$TA" "не ${PHRASE}"
+o="$(hook PreToolUse A "$TA" "$WORK" 'git push -q origin main')"
+expect_deny "отрицание фразы блокирует отправку" "$o"
+combined_cmd='git push --force-with-lease origin main'
+say_user "$TA" "$(printf 'подтверждаю %s, беру риск на себя, бэкап проверен\nкаталог %s\n%s' "$combined_cmd" "$WORK" "$PHRASE")"
+o="$(hook PreToolUse A "$TA" "$WORK" "$combined_cmd")"
+expect_allow "одно сообщение для двух замков на точную отправку" "$o"
+o="$(hook PreToolUse A "$TA" "$WORK" 'git push origin main')"
+expect_deny "совместное согласие не подходит другой команде" "$o"
 say_user "$TA" "${PHRASE}"
 o="$(run_as A 'git push -q origin main')"
 expect_allow "фраза оператора в последней реплике открывает отправку" "$o"
@@ -121,7 +136,7 @@ o="$(hook PreToolUse A "$TA" "$TMP" "git -C \"${WORK}\" push -q origin main")"
 expect_deny "путь с пробелом и кириллицей через -C распознан" "$o" "Б: вторая"
 o="$(hook PreToolUse A "$TA" "$TMP" 'git -C "$NOWHERE" push -q origin main')"
 expect_deny "неопределимый репозиторий: запрет с советом" "$o" "git -C"
-o="$(hook PreToolUse A "$TA" "$WORK" "ssh madik 'cd /srv/apps/x && git push -q origin main'")"
+o="$(hook PreToolUse A "$TA" "$WORK" "ssh fixture-host'cd /srv/apps/x && git push -q origin main'")"
 expect_allow "git push внутри ssh не проверяется" "$o"
 echo "[1а] фикстура обхода: формы отправки, которых не было в исходных примерах"
 o="$(hook PreToolUse A "$TA" "$WORK" 'git push')"
@@ -159,12 +174,12 @@ expect_deny "commit -a с чужими правками блокируется" 
 
 echo "[3] коммит забирает чужие строки общего файла (03.09.2026)"
 o="$(run_as B 'cat >> СТАТУС.md <<'"'"'EOF'"'"'
-## Сессия Б: дневной разбор BotDesigner и FKS
+## Сессия Б: дневной разбор Проект Б и Проекта А
 Незакоммиченный раздел соседней сессии, строка первая
 EOF')"
 expect_allow "Б дописала незакоммиченный раздел" "$o"
 o="$(run_as A 'printf "Запись сессии А о переносе дампа в карантин\n" >> СТАТУС.md && git commit -qm "А: статус" -- СТАТУС.md')"
-expect_deny "А: коммит с чужими строками останавливается" "$o" "дневной разбор BotDesigner"
+expect_deny "А: коммит с чужими строками останавливается" "$o" "дневной разбор Проект Б"
 printf '%s' "$o" | grep -qF "переносе дампа в карантин" && bad "своя строка А помечена чужой" || ok "своя строка А чужой не помечена"
 o="$(run_as A "${ACK} git commit -qm \"А: статус\" -- СТАТУС.md")"
 expect_allow "повтор с пометкой проходит" "$o"
@@ -199,14 +214,56 @@ expect_allow "Б: amend своего коммита проходит" "$o"
 echo "[5] память сессии"
 ha="$(git -C "$WORK" log --format=%H --grep='^А: своя запись$' | head -1)"
 hb="$(git -C "$WORK" log --format=%H --grep='^Б: своя запись$' | head -1)"
-grep -q "$ha" "${SESSION_GIT_STATE_DIR}/A.commits" && ok "коммит А записан за А" || bad "коммит А не записан"
-grep -q "$hb" "${SESSION_GIT_STATE_DIR}/A.commits" && bad "коммит Б записан за А" || ok "коммит Б за А не записан"
+owns() {
+  python3 -B -c '
+import runpy, sys
+m = runpy.run_path(sys.argv[1])
+sys.exit(0 if sys.argv[4] in m["my_commits"](sys.argv[2], sys.argv[3]) else 1)
+' "$PYCORE" "$1" "$WORK" "$2"
+}
+owns A "$ha" && ok "коммит А записан за А" || bad "коммит А не записан"
+owns A "$hb" && bad "коммит Б записан за А" || ok "коммит Б за А не записан"
 o="$(hook PreToolUse A "$TA" "$WORK" 'ls -la && echo готово')"
 [ -z "$o" ] && ok "команда без git проходит молча" || bad "команда без git дала вывод" "$o"
 
 echo "[6] вердикт доходит и при чужой кодовой странице (правило 3д)"
 o="$(HOOK_ENC=cp1252 hook PreToolUse A "$TA" "$WORK" 'git push -q origin main')"
 if is_deny "$o" && printf '%s' "$o" | grep -qF "ЗАМОК"; then ok "при cp1252 отказ напечатан по-русски"; else bad "при cp1252 вердикт потерян" "$o"; fi
+
+echo "[7] две сессии получили допуск до выполнения любой из команд"
+ca='git commit -qm "одинаковое сообщение" --allow-empty'
+cb="$ca"
+pa="$(HOOK_CODEX=1 hook PreToolUse A "$TA" "$WORK" "$ca")"
+pb="$(hook PreToolUse B "$TB" "$WORK" "$cb")"
+printf '%s' "$pa" | grep -q '"permissionDecision": "allow"' && ok "Codex получил обновлённый вход" || bad "Codex не получил обновлённый вход"
+printf '%s' "$pb" | grep -q '"permissionDecision"' && bad "для Claude отключена проверка разрешений" || ok "разрешения Claude остались в силе"
+(cd "$WORK" && bash -c "$(rewritten "$pb" "$cb")") || bad "коммит Б не создался"
+hb="$(git -C "$WORK" rev-parse HEAD)"
+(cd "$WORK" && bash -c "$(rewritten "$pa" "$ca")") || bad "коммит А не создался"
+ha="$(git -C "$WORK" rev-parse HEAD)"
+[ "$ha" != "$hb" ] && owns A "$ha" && owns B "$hb" && ! owns A "$hb" && ! owns B "$ha" \
+  && ok "даже коммиты с одинаковым сообщением принадлежат каждый своей сессии" || bad "коммиты перепутаны"
+bad_ref="$(hook PreToolUse A "$TA" "$WORK" 'git push origin fixture-branch-not-present')"
+expect_deny "неизвестный источник отправки блокируется" "$bad_ref" "не удалось определить"
+o="$(python3 -B -c '
+import runpy, sys
+m = runpy.run_path(sys.argv[1])
+check = m["check_push"]
+real_git = m["git"]
+def git_with_failed_rev_list(repo, *args):
+    return None if args[0] == "rev-list" else real_git(repo, *args)
+check.__globals__["git"] = git_with_failed_rev_list
+check(sys.argv[2], ["origin", "main"], "A", sys.argv[3], "git push origin main", sys.argv[2])
+' "$PYCORE" "$WORK" "$TA")"
+expect_deny "сбой чтения списка коммитов блокирует отправку" "$o" "не удалось определить"
+bad_mix="$(hook PreToolUse A "$TA" "$WORK" 'git commit --allow-empty -qm test && git push origin main')"
+expect_deny "коммит и отправка в одной команде блокируются" "$bad_mix" "двумя разными вызовами"
+literal='printf "%s\n" "git commit -m текст"'
+o="$(hook PreToolUse A "$TA" "$WORK" "$literal")"
+[ "$(rewritten "$o" "$literal")" = "$literal" ] && ok "цитата в команде сохранена" || bad "цитата изменена"
+tagged="$(rewritten "$pb" "$cb")"
+o="$(hook PreToolUse B "$TB" "$WORK" "$tagged")"
+[ -z "$o" ] && ok "при повторном вызове метка не дублируется" || bad "метка добавлена повторно"
 
 echo
 echo "Итог: ${PASS} прошло, ${FAIL} провалено"

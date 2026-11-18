@@ -30,15 +30,6 @@ export PYTHONIOENCODING=utf-8
 
 RAW="$(cat)"
 
-# ── Фраза подтверждения (канон C.3) ───────────────────────────────────────────
-# Ищем скелет: «беру риск на себя» + «бэкап проверен» (е/ё и регистр — свободно).
-# Полная форма: «подтверждаю <операция>, беру риск на себя, бэкап проверен».
-CONFIRM_RE='беру риск на себя'
-CONFIRM_RE2='б[эеёЭЕЁ]кап проверен'
-# Окно свежести: подтверждение действительно N последних реплик оператора,
-# иначе одна фраза открывала бы дверь до конца сессии.
-CONFIRM_WINDOW=10
-
 # ── Паттерны красной зоны (§6.3 CLAUDE.md) ────────────────────────────────────
 # Расширенные regex, регистронезависимо. Ловим и обёртки вида ssh host "…".
 RED_PATTERNS=(
@@ -203,86 +194,25 @@ if [ -z "${TRANSCRIPT:-}" ] || [ ! -f "${TRANSCRIPT:-}" ]; then
   # slug = cwd с заменой не-буквенно-цифровых символов на «-» (канон Claude Code).
   SLUG="$(printf '%s' "$CWD" | sed 's/[^a-zA-Z0-9]/-/g')"
   TRANSCRIPT="$HOME/.claude/projects/$SLUG/${SESSION_ID:-}.jsonl"
-fi
-
-DENY_MSG="🔴 КРАСНАЯ ЗОНА — операция заблокирована замком (ADR-0022, конституция C.3).
-
-Команда: ${CMD}
-
-Необратимая операция выполняется только после явного подтверждения оператора.
-Агент: пройди процедуру §6.3 (ASSESS → PROPOSE с «⚠️ ЧТО ТЕРЯЕМ» и «⚠️ КОПИЯ» →
-EXECUTE → VERIFY) и попроси оператора написать СВОИМИ РУКАМИ:
-
-подтверждаю <что именно делаем>, беру риск на себя, бэкап проверен
-
-Пока этой фразы нет в сообщениях оператора — команда не выполнится.
-Обойти нельзя: фраза ищется в репликах оператора, агент их не пишет."
-
-if [ ! -f "$TRANSCRIPT" ]; then
-  deny "$DENY_MSG
-
-(Транскрипт сессии не найден: $TRANSCRIPT — подтверждение проверить нечем, поэтому блокирую.)"
-fi
-
-# Достаём последние CONFIRM_WINDOW реплик оператора и ищем в них фразу.
-FOUND=""
-if command -v python3 >/dev/null 2>&1; then
-  FOUND="$(python3 -c '
-import sys, json, re
-path, window, re1, re2 = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
-msgs = []
-try:
-    with open(path, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            if rec.get("type") != "user":
-                continue
-            # Отсекаем ВСЁ, что лишь выглядит репликой оператора (иначе фраза
-            # подтверждения, лежащая в файле/скилле/выводе команды, открыла бы замок —
-            # prompt injection, конституция C.11). Проверено на реальном транскрипте:
-            #   isMeta:true        — вставки движка (тексты скиллов, caveat-блоки)
-            #   sourceToolUseID    — контент, порождённый вызовом инструмента
-            #   isSidechain:true   — реплики внутри субагента, не оператор
-            if rec.get("isMeta") or rec.get("sourceToolUseID") or rec.get("isSidechain"):
-                continue
-            m = rec.get("message") or {}
-            if m.get("role") != "user":
-                continue
-            c = m.get("content")
-            if isinstance(c, list):
-                # Реплика оператора — только текстовые блоки; tool_result сюда не считаем,
-                # иначе вывод команды мог бы «подтвердить» сам себя.
-                if any(b.get("type") == "tool_result" for b in c if isinstance(b, dict)):
-                    continue
-                c = " ".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
-            if not isinstance(c, str) or not c.strip():
-                continue
-            # Служебные обёртки слэш-команд и их вывод — тоже не голос оператора.
-            if c.lstrip().startswith(("<command-name>", "<local-command-", "<command-message>",
-                                      "<system-reminder>", "Base directory for this skill")):
-                continue
-            msgs.append(c)
-except Exception:
-    sys.exit(2)
-for text in msgs[-window:]:
-    low = text.lower()
-    if re.search(re1, low) and re.search(re2, low):
-        print("yes")
-        break
-' "$TRANSCRIPT" "$CONFIRM_WINDOW" "$CONFIRM_RE" "$CONFIRM_RE2" 2>/dev/null)" || FOUND=""
-else
-  # Без python3 — грубее: хвост файла, отбросив вставки движка и вывод инструментов.
-  TAIL="$(grep '"role":"user"' "$TRANSCRIPT" 2>/dev/null \
-          | grep -v '"tool_result"' | grep -v '"isMeta":true' \
-          | grep -v '"sourceToolUseID"' | grep -v '"isSidechain":true' \
-          | tail -n "$CONFIRM_WINDOW")"
-  if printf '%s' "$TAIL" | grep -iq "$CONFIRM_RE" && printf '%s' "$TAIL" | grep -iq "$CONFIRM_RE2"; then
-    FOUND="yes"
+  # Codex (ADR-0042): записи лежат в $CODEX_HOME/sessions/ГГГГ/ММ/ДД/rollout-*<id>.jsonl.
+  if [ ! -f "$TRANSCRIPT" ] && command -v python3 >/dev/null 2>&1; then
+    CX="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import codex_transcript as c; print(c.find_transcript(sys.argv[2]))' \
+          "$(cd "$(dirname "$0")" && pwd)" "${SESSION_ID:-}" 2>/dev/null)" || CX=""
+    [ -n "$CX" ] && TRANSCRIPT="$CX"
   fi
 fi
 
-[ "$FOUND" = "yes" ] && exit 0
-deny "$DENY_MSG"
+if [ -f "$TRANSCRIPT" ] && command -v python3 >/dev/null 2>&1; then
+  if printf '%s' "$RAW" | python3 -I "$(dirname "$0")/red-zone-approval.py" "$TRANSCRIPT"; then
+    exit 0
+  fi
+fi
+
+deny "🔴 КРАСНАЯ ЗОНА. Требуется отдельное подтверждение этой команды (§6.3, ADR-0043).
+Покажи оператору цель, последствия, сведения о копии, точную команду и рабочий каталог.
+Оператор сам заполняет две строки одним сообщением:
+
+подтверждаю <точная команда>, беру риск на себя, бэкап проверен
+каталог <абсолютный путь>
+
+Согласие действует один раз. Более поздняя реплика оператора отменяет его."

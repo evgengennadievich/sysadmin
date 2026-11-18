@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# run-evals.sh — прогон evaluation-фраз через claude -p и сверка с ожиданиями.
+# run-evals.sh — прогон контрольных фраз. Движок по умолчанию: Codex.
 #
-# Использует подписку Claude Code (headless через claude -p) — не требует
-# отдельного ANTHROPIC_API_KEY. См. ADR-0004 §3.
+# Запускает установленные CLI. Оценка числа вызовов доступна без CLI и без модели.
+# См. ADR-0004 и ADR-0042.
 #
 # Использование:
 #   ./scripts/run-evals.sh <skill-name>      # прогон одного скилла
 #   ./scripts/run-evals.sh --all              # прогон всех скиллов
 #   ./scripts/run-evals.sh --estimate         # только подсчитать число вызовов (без запроса)
 #   ./scripts/run-evals.sh --all --positive-only  # только positive (дешевле прогон)
+#   ./scripts/run-evals.sh --all --sample 1  # по одной фразе каждого типа на скилл
 #
 # Выход:
 #   0 — все проверки прошли
@@ -24,6 +25,16 @@ SKILLS_DIR="$REPO_ROOT/.claude/skills"
 RESULTS_DIR="$REPO_ROOT/.eval-results"
 HELPER_PARSE="$REPO_ROOT/scripts/eval-helpers/parse-triggers.sh"
 HELPER_INVOKE="$REPO_ROOT/scripts/eval-helpers/invoke-claude.sh"
+# Движок диспетчера (ADR-0042).
+EVAL_ENGINE="${EVAL_ENGINE:-codex}"
+case "$EVAL_ENGINE" in
+    claude) ;;
+    codex)
+        SKILLS_DIR="$REPO_ROOT/.agents/skills"
+        HELPER_INVOKE="$REPO_ROOT/scripts/eval-helpers/invoke-codex.sh"
+        ;;
+    *) echo "error: EVAL_ENGINE должен быть claude или codex" >&2; exit 2 ;;
+esac
 
 # --- Парсинг аргументов ----------------------------------------------------
 
@@ -49,7 +60,14 @@ while [[ $# -gt 0 ]]; do
         --all)            MODE="all" ;;
         --estimate)       ESTIMATE_ONLY=1 ;;
         --positive-only)  POSITIVE_ONLY=1 ;;
-        --sample)         SAMPLE_N="$2"; shift ;;
+        --sample)
+            if [[ ! "${2:-}" =~ ^[1-9][0-9]*$ ]]; then
+                echo "error: --sample ожидает положительное целое число" >&2
+                exit 2
+            fi
+            SAMPLE_N="$2"
+            shift
+            ;;
         -h|--help)        sed -n '2,20p' "$0" | sed 's/^# \?//'; exit 0 ;;
         --*)              echo "unknown flag: $1" >&2; exit 2 ;;
         *)
@@ -71,10 +89,6 @@ fi
 # --- Проверки окружения ----------------------------------------------------
 
 [[ -x "$HELPER_PARSE" ]]  || { echo "error: $HELPER_PARSE not executable" >&2; exit 2; }
-[[ -x "$HELPER_INVOKE" ]] || { echo "error: $HELPER_INVOKE not executable" >&2; exit 2; }
-command -v claude >/dev/null 2>&1 || { echo "error: claude CLI not in PATH" >&2; exit 2; }
-command -v jq >/dev/null 2>&1     || { echo "error: jq not installed" >&2; exit 2; }
-
 cd "$REPO_ROOT"
 
 # --- Собираем список скиллов ----------------------------------------------
@@ -129,7 +143,7 @@ for skill in "${SKILL_LIST[@]}"; do
 done
 
 if [[ "$ESTIMATE_ONLY" -eq 1 ]]; then
-    echo "Estimate: $total_calls вызовов к claude -p (~\$0.30 каждый = ~\$$(awk "BEGIN { printf \"%.2f\", $total_calls * 0.30 }"))"
+    echo "Оценка для $EVAL_ENGINE: $total_calls вызовов"
     echo
     echo "Разбивка по скиллам:"
     for i in "${!PER_SKILL_NAMES[@]}"; do
@@ -140,14 +154,21 @@ fi
 
 # --- Прогон ----------------------------------------------------------------
 
+[[ -x "$HELPER_INVOKE" ]] || { echo "error: $HELPER_INVOKE not executable" >&2; exit 2; }
+command -v "$EVAL_ENGINE" >/dev/null 2>&1 || { echo "error: $EVAL_ENGINE CLI not in PATH" >&2; exit 2; }
+if [[ "$EVAL_ENGINE" == "claude" ]] && ! command -v jq >/dev/null 2>&1; then
+    echo "error: jq not installed" >&2
+    exit 2
+fi
 mkdir -p "$RESULTS_DIR"
 TS=$(date -u +%Y%m%dT%H%M%SZ)
-REPORT="$RESULTS_DIR/$TS.md"
+REPORT="$RESULTS_DIR/$TS-$EVAL_ENGINE.md"
 
 # Шапка отчёта
 {
     echo "# Eval Run $TS"
     echo
+    echo "**Engine:** $EVAL_ENGINE  "
     echo "**Mode:** $MODE  "
     echo "**Skills:** ${#SKILL_LIST[@]}  "
     echo "**Planned calls:** $total_calls  "
@@ -208,7 +229,7 @@ for skill in "${SKILL_LIST[@]}"; do
         esac
 
         # --- вызов -----
-        if out=$("$HELPER_INVOKE" "$phrase" 2>/dev/null); then
+        if out=$("$HELPER_INVOKE" "$phrase"); then
             got=$(echo "$out" | awk -F'|' '{print $1}')
             cost=$(echo "$out" | awk -F'|' '{print $2}')
             total_cost=$(awk "BEGIN { printf \"%.4f\", $total_cost + $cost }")
@@ -255,10 +276,16 @@ done
     echo
     echo "- ✅ / 🟡 успехов: **$total_ok**"
     echo "- ❌ провалов: **$total_fail**"
-    echo "- 💰 суммарная стоимость: **\$$total_cost**"
+    if [[ "$EVAL_ENGINE" == "claude" ]]; then
+        echo "- 💰 суммарная стоимость по данным CLI: **\$$total_cost**"
+    else
+        echo "- Стоимость в долларах недоступна в отчёте Codex."
+    fi
     echo
     if [[ ${#fail_lines[@]} -gt 0 ]]; then
-        echo "### Провалы (нужно чинить description)"
+        echo "### Расхождения и ошибки прогона"
+        echo
+        echo "ERROR означает сбой запуска или формата ответа. Выбор скилла в таком случае не оценён."
         echo
         for line in "${fail_lines[@]}"; do
             echo "- $line"
@@ -268,7 +295,7 @@ done
 
 # Краткое резюме в stdout
 echo "Report: $REPORT"
-echo "OK/PARTIAL: $total_ok   FAIL: $total_fail   Cost: \$$total_cost"
+echo "OK/PARTIAL: $total_ok   FAIL: $total_fail"
 
 [[ $total_fail -eq 0 ]] || exit 1
 exit 0

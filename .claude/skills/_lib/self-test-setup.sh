@@ -137,9 +137,14 @@ self_test_setup() {
         fi
     fi
 
-    # 6. bridge-файл
-    if [ ! -f "$HOME/.claude/agents/sysadmin.md" ]; then
-        _stp_add "Нет bridge-файла ~/.claude/agents/sysadmin.md — @sysadmin не вызвать из других папок."
+    # 6. Указатель для среды, в которой идёт настройка.
+    local codex_bridge="${CODEX_HOME:-$HOME/.codex}/agents/sysadmin.toml"
+    if [ -n "${CODEX_THREAD_ID:-}" ]; then
+        if [ ! -s "$codex_bridge" ]; then
+            _stp_add "Нет указателя Codex: $codex_bridge."
+        fi
+    elif [ ! -s "$HOME/.claude/agents/sysadmin.md" ] && [ ! -s "$codex_bridge" ]; then
+        _stp_add "Нет указателя на ядро сисадмина для запуска из другой папки."
     fi
 
     if [ -n "$problems" ]; then
@@ -153,7 +158,7 @@ self_test_setup() {
    • bash + jq: OK
    • конфиг(и) записан(ы) и валиден(ы): $config_path${infra_config_path:+ + $infra_config_path}
    • папка инфраструктуры существует
-   • bridge-файл на месте (@sysadmin доступен из любой папки)
+   • указатель на ядро сисадмина найден
 EOF
     return 0
 }

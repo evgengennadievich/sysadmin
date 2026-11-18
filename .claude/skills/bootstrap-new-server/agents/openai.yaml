@@ -1,0 +1,4 @@
+# Codex (ADR-0042): то же, что disable-model-invocation в SKILL.md для Claude Code (ADR-0027).
+# Скилл запускает оператор явной командой $bootstrap-new-server, агент сам его не вызывает.
+policy:
+  allow_implicit_invocation: false

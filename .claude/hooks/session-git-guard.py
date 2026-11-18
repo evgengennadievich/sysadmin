@@ -15,9 +15,9 @@
      Сюда же `--amend` поверх коммита, который сделала не эта сессия. Запрет.
   3. commit: строки, которых эта сессия не писала (нет ни в одном её вызове инструментов),
      показываются до коммита. Это «лежачий полицейский», а не запрет: авторство строки
-     определяется приблизительно (вариант Б, решение Евгения 09.11.2026). Повтор той же
+     определяется приблизительно (вариант Б, решение оператора 09.11.2026). Повтор той же
      команды с пометкой ACK_MARK проходит.
-После выполнения (PostToolUse) сессия записывает свои новые коммиты в файл состояния.
+При выполнении `git commit` Git записывает метку сессии в журнал HEAD (reflog).
 
 Границы (что замок НЕ делает, записано в ADR-0041):
   - без python3 не работает (обёртка выходит молча);
@@ -36,7 +36,6 @@ import re
 import shlex
 import subprocess
 import sys
-import time
 import unicodedata
 
 # Вывод читает движок, а не терминал: печатаем UTF-8 при любой кодовой странице консоли
@@ -47,7 +46,8 @@ try:
 except Exception:
     pass
 
-PUSH_PHRASE = "отправляй вместе с чужими"
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from approval_format import PUSH_PHRASE, red_approval
 ACK_MARK = "SESSION_GIT_ACK=1"
 MIN_LINE = 12        # строки короче не проверяем на авторство: слишком много совпадений
 SHOW = 12            # сколько строк или коммитов показывать в сообщении
@@ -58,6 +58,10 @@ ASSIGN_RE = re.compile(r'(?:^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=(' + TOKEN + r')
 GIT_RE = re.compile(
     r'(?<![\w.-])git((?:\s+(?:-C\s+(?:' + TOKEN + r')|-c\s+(?:' + TOKEN + r')'
     r'|--?[A-Za-z][\w-]*(?:=(?:' + TOKEN + r'))?))*)\s+(commit|push|add)\b')
+SHELL_PART_RE = re.compile(r"""(?:\\[^\n]|'[^']*'|"(?:\\.|[^"\\])*")|(?:[;&|()\n]+)|[^'"\\;&|()\n]+""")
+SHELL_GIT_START = re.compile(
+    r"""[ \t]*(?:[A-Za-z_]\w*=(?:'[^']*'|"(?:\\.|[^"\\])*"|[^ \t\r\n'";&|()]+)*[ \t]+)*"""
+    r"(?P<exe>(?:/[^ \t'\";&|()]+/)?git)(?=[ \t])")
 CD_RE = re.compile(r'(?<![\w-])cd\s+(' + TOKEN + r')')
 SEG_END_RE = re.compile(r'&&|\|\||;|\||\n|\)')
 
@@ -68,17 +72,6 @@ def nfc(s):
 
 def norm(s):
     return re.sub(r"\s+", " ", nfc(s)).strip()
-
-
-def state_dir():
-    d = os.environ.get("SESSION_GIT_STATE_DIR") or os.path.join(
-        os.path.expanduser("~"), ".claude", "state", "session-git")
-    os.makedirs(d, exist_ok=True)
-    return d
-
-
-def safe_id(s):
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", s or "nosession")
 
 
 def git(repo, *args):
@@ -202,51 +195,79 @@ def rel(top, base, p):
     return nfc(r)
 
 
-# ── память сессии ─────────────────────────────────────────────────────────────
+# ── авторство коммитов ─────────────────────────────────────────────────────────
 
-def commits_file(sid):
-    return os.path.join(state_dir(), safe_id(sid) + ".commits")
+def session_mark(sid):
+    return "sysadmin-session-" + hashlib.sha256(sid.encode("utf-8")).hexdigest()
+
+
+def mark_commits(cmd, sid):
+    """Добавить переменную окружения только к прямым вызовам git commit."""
+    # При неоднозначном синтаксисе команду не меняем. Коммит без метки потребует
+    # обычного подтверждения при отправке, как коммит из внешнего скрипта.
+    if not sid or any(s in cmd for s in ("<<", "$(", "`", "\\\n", "#")):
+        return cmd
+    starts, end = [0], 0
+    for part in SHELL_PART_RE.finditer(cmd):
+        if part.start() != end:
+            return cmd
+        end = part.end()
+        if part.group()[0] in ";&|()\n":
+            starts.append(end)
+    if end != len(cmd):
+        return cmd
+
+    prefix = "GIT_REFLOG_ACTION=" + session_mark(sid) + " "
+    positions = []
+    for start in starts:
+        exe = SHELL_GIT_START.match(cmd, start)
+        if not exe:
+            continue
+        git_start = exe.end("exe") - len("git")
+        invocation = GIT_RE.match(cmd, git_start)
+        if (invocation and invocation.group(2) == "commit"
+                and not cmd[start:exe.start("exe")].endswith(prefix)):
+            positions.append(exe.start("exe"))
+    for pos in reversed(positions):
+        cmd = cmd[:pos] + prefix + cmd[pos:]
+    return cmd
 
 
 def my_commits(sid, top):
-    mine = set()
-    try:
-        with open(commits_file(sid), encoding="utf-8") as f:
-            for line in f:
-                parts = line.rstrip("\n").split("\t")
-                if len(parts) == 2 and parts[0] == top:
-                    mine.add(parts[1])
-    except FileNotFoundError:
-        pass
-    return mine
-
-
-def pending_file(sid):
-    return os.path.join(state_dir(), safe_id(sid) + ".pending.json")
-
-
-def cmd_key(cmd):
-    return hashlib.sha256(cmd.encode("utf-8", "replace")).hexdigest()[:16]
-
-
-def load_pending(sid):
-    try:
-        with open(pending_file(sid), encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def save_pending(sid, data):
-    with open(pending_file(sid), "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
+    if not sid:
+        return set()
+    prefix = session_mark(sid) + ": "
+    log = git(top, "reflog", "show", "--format=%H%x09%gs", "HEAD") or ""
+    return {sha for line in log.splitlines()
+            for sha, sep, subject in [line.partition("\t")]
+            if sep and subject.startswith(prefix)}
 
 
 # ── транскрипт ────────────────────────────────────────────────────────────────
 
+def _codex():
+    """Разбор записи Codex (ADR-0042); модуль лежит рядом с замком."""
+    try:
+        import codex_transcript
+        return codex_transcript
+    except Exception:
+        return None
+
+
+def resolve_transcript(path, sid):
+    """Путь из входа хука; если его нет, ищем запись Codex по id сессии."""
+    if path and os.path.isfile(path):
+        return path
+    cx = _codex()
+    return (cx.find_transcript(sid) if cx else "") or path
+
+
 def operator_messages(path):
     """Реплики оператора; вставки движка, вывод инструментов и субагенты отсечены
     тем же фильтром, что в замке красной зоны (C.11)."""
+    cx = _codex()
+    if cx and cx.is_codex(path):
+        return cx.operator_messages(path)
     msgs = []
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -279,14 +300,15 @@ def operator_messages(path):
     return msgs
 
 
-def phrase_ok(transcript):
+def phrase_ok(transcript, command=None, cwd=None):
     if not transcript or not os.path.isfile(transcript):
         return False
     msgs = operator_messages(transcript)
     if not msgs:
         return False
-    last = nfc(msgs[-1]).lower().replace("ё", "е")
-    return PUSH_PHRASE.replace("ё", "е") in last
+    last = msgs[-1].strip()
+    return (last.casefold() == PUSH_PHRASE or
+            (command is not None and last == red_approval(command, cwd) + "\n" + PUSH_PHRASE))
 
 
 def own_corpus(transcript, cmd):
@@ -304,6 +326,14 @@ def own_corpus(transcript, cmd):
                 walk(x)
     if not transcript or not os.path.isfile(transcript):
         return None
+    cx = _codex()
+    if cx and cx.is_codex(transcript):
+        recs = cx.load(transcript)
+        if recs is None:
+            return None
+        parts.extend(cx.tool_corpus(recs))
+        text = norm("\n".join(parts))
+        return text, re.sub(r"\d", "", text)
     try:
         with open(transcript, encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -488,40 +518,84 @@ def check_commit(top, base, args, cmd, vars_, adds, sid, transcript):
          + ACK_MARK + ".")
 
 
-def check_push(top, args, sid, transcript):
+def check_push(top, args, sid, transcript, command, cwd):
+    def unknown():
+        deny("🟠 ЗАМОК ОБЩЕЙ ПАПКИ (ADR-0041): не удалось определить, какие коммиты "
+             "уйдут в `git push`. Проверь выбранный remote и исходную ветку. "
+             "Укажи их явно и повтори проверку отдельной командой.")
+
     remote, refspecs = None, []
-    every = any(t in ("--all", "--mirror", "--branches") for t in args)
+    all_refs = "--mirror" in args
+    all_branches = any(t in ("--all", "--branches") for t in args)
+    all_tags = "--tags" in args
+    options = True
     for t in args:
-        if t.startswith("-"):
+        if options and t == "--":
+            options = False
+            continue
+        if options and t.startswith("-"):
+            if t not in ("--all", "--branches", "--mirror", "--tags", "--follow-tags",
+                         "--atomic", "--porcelain", "--dry-run", "-n", "--quiet", "-q",
+                         "--verbose", "-v", "--progress", "--no-progress", "--set-upstream",
+                         "-u", "--force", "-f", "--force-with-lease", "--force-if-includes",
+                         "--signed", "--no-signed") and not t.startswith("--force-with-lease="):
+                unknown()
             continue
         if remote is None:
             remote = t
         else:
             refspecs.append(t)
     branch = (git(top, "symbolic-ref", "--short", "-q", "HEAD") or "").strip()
-    srcs = [branch] if branch else []
+    if remote is None:
+        keys = ["remote.pushDefault"]
+        if branch:
+            keys = [f"branch.{branch}.pushRemote", *keys, f"branch.{branch}.remote"]
+        remote = next((v.strip() for k in keys if (v := git(top, "config", "--get", k))
+                       and v.strip()), "origin")
+    if not remote or "$" in remote:
+        unknown()
+    if not refspecs and not (all_refs or all_branches):
+        configured = git(top, "config", "--get-all", f"remote.{remote}.push")
+        if configured:
+            refspecs = configured.splitlines()
+
+    srcs = []
     if refspecs:
-        srcs = []
         for r in refspecs:
             s = r.lstrip("+").split(":")[0]
-            srcs.append(branch if s in ("", "HEAD") else s)
-    if every:
-        srcs = ["--branches"]  # `--all`/`--mirror` уносят все ветки, а не только текущую
-    srcs = [s for s in srcs if s]
+            if r in (":", "+:") or "*" in s:
+                all_refs = True   # проверяем надмножество при шаблоне
+            elif s:
+                resolved = git(top, "rev-parse", "--verify", "--end-of-options", s)
+                if not resolved:
+                    unknown()
+                srcs.append(resolved.strip())
+    elif not (all_refs or all_branches or all_tags):
+        default = (git(top, "config", "--get", "push.default") or "simple").strip()
+        if default == "matching":
+            all_branches = True
+        elif branch and default in ("simple", "current", "upstream", "tracking"):
+            srcs.append("HEAD")
+        else:
+            unknown()
+    if all_refs:
+        srcs.append("--all")
+    else:
+        if all_branches:
+            srcs.append("--branches")
+        if all_tags:
+            srcs.append("--tags")
     if not srcs:
-        return
-    if remote is None:
-        cfg = git(top, "config", "branch." + (branch or "main") + ".remote") or "origin"
-        remote = cfg.strip() or "origin"
+        return  # явный refspec удаления не содержит отправляемых коммитов
     out = git(top, "rev-list", *srcs, "--not", "--remotes=" + remote)
     if out is None:
-        return
+        unknown()
     outgoing = [h for h in out.split() if h]
     if not outgoing:
         return
     mine = my_commits(sid, top)
     foreign = [h for h in outgoing if h not in mine]
-    if not foreign or phrase_ok(transcript):
+    if not foreign or phrase_ok(transcript, command, cwd):
         return
     lines = []
     for h in foreign[:SHOW]:
@@ -546,38 +620,26 @@ def main():
         return
     if d.get("tool_name") not in (None, "Bash"):
         return
-    cmd = (d.get("tool_input") or {}).get("command") or ""
-    if "git" not in cmd:
+    if d.get("hook_event_name") not in (None, "PreToolUse"):
         return
-    cmd = nfc(cmd)
+    tool_input = d.get("tool_input") or {}
+    raw_cmd = tool_input.get("command") or ""
+    if "git" not in raw_cmd:
+        return
+    cmd = nfc(raw_cmd)
     sid = d.get("session_id") or ""
-    transcript = d.get("transcript_path") or ""
-    cwd = d.get("cwd") or os.getcwd()
-    event = d.get("hook_event_name") or "PreToolUse"
+    transcript = resolve_transcript(d.get("transcript_path") or "", sid)
+    cwd = tool_input.get("workdir") or tool_input.get("cwd") or d.get("cwd") or os.getcwd()
     inv, vars_ = invocations(cmd, cwd)
     if not inv:
         return
 
-    if event == "PostToolUse":
-        pend = load_pending(sid)
-        entry = pend.pop(cmd_key(cmd), None)
-        if entry is None:
-            return
-        rows = []
-        for top, before in entry:
-            head = (git(top, "rev-parse", "HEAD") or "").strip()
-            if not head or head == before:
-                continue
-            rng = git(top, "rev-list", before + ".." + head) if before else git(top, "rev-list", "-1", head)
-            for h in (rng or "").split():
-                rows.append(top + "\t" + h)
-        if rows:
-            with open(commits_file(sid), "a", encoding="utf-8") as f:
-                f.write("\n".join(rows) + "\n")
-        save_pending(sid, pend)
-        return
+    kinds = {kind for kind, _, _, _ in inv}
+    if {"commit", "push"} <= kinds:
+        deny("🟠 ЗАМОК ОБЩЕЙ ПАПКИ (ADR-0041): выполни `git commit` и `git push` "
+             "двумя разными вызовами. Иначе проверка отправки не увидит новый коммит.")
 
-    adds_by_top, record = {}, []
+    adds_by_top = {}
     for kind, pos, base, args in inv:
         top = toplevel(base) if base else None
         if kind == "add":
@@ -590,15 +652,18 @@ def main():
                 deny("🟠 ЗАМОК ОБЩЕЙ ПАПКИ (ADR-0041): не могу определить, из какого репозитория "
                      "идёт `git push` (каталог: " + str(base) + "). Без этого не проверить, чьи "
                      "коммиты уходят. Повтори с явным путём: `git -C <абсолютный путь> push`.")
-            check_push(top, args, sid, transcript)
+            check_push(top, args, sid, transcript, raw_cmd, cwd)
             continue
         if kind == "commit" and top:
             check_commit(top, base, args, cmd, vars_, adds_by_top.get(top, []), sid, transcript)
-            record.append([top, (git(top, "rev-parse", "-q", "--verify", "HEAD") or "").strip()])
-    if record:
-        pend = load_pending(sid)
-        pend[cmd_key(cmd)] = record
-        save_pending(sid, pend)
+    if "commit" in kinds:
+        updated = mark_commits(raw_cmd, sid)
+        if updated != raw_cmd:
+            result = {"hookEventName": "PreToolUse",
+                      "updatedInput": dict(tool_input, command=updated)}
+            if d.get("turn_id"):  # Codex требует allow для updatedInput. Это не ответ PermissionRequest.
+                result["permissionDecision"] = "allow"
+            print(json.dumps({"hookSpecificOutput": result}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
